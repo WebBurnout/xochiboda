@@ -1,0 +1,10 @@
+secret.txt
+node_modules/
+localhost.pem
+localhost-key.pem
+seed.csv
+
+# Supabase CLI-generated local state
+supabase/.temp/
+supabase/.branches/
+
