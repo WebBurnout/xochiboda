@@ -36,9 +36,7 @@ function eventLabel(value) {
 }
 
 function invitationUrl(id, path = '/invitation') {
-  const url = new URL(path, window.location.origin)
-  url.searchParams.set('invitation', id)
-  return url.href
+  return `${path}?id=${encodeURIComponent(id)}`
 }
 
 function reactiveProperty(element, name, initialValue) {

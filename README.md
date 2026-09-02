@@ -51,7 +51,7 @@ Add `is-loading` to the root HTML element in the static markup. The invitation m
 Invitation links use the UUID query parameter:
 
 ```text
-https://localhost:8443/?invitation=INVITATION_UUID
+https://localhost:8443/?id=INVITATION_UUID
 ```
 
 Start the server:
@@ -83,7 +83,7 @@ npx supabase db reset
 The sample invitations use fixed UUIDs, so their local links remain stable across resets. For example:
 
 ```text
-https://localhost:8443/?invitation=10000000-0000-4000-8000-000000000001
+https://localhost:8443/?id=10000000-0000-4000-8000-000000000001
 ```
 
 ### Loading `seed.csv`

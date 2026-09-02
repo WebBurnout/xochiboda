@@ -1,20 +1,20 @@
 
 
-deploy the editor change and see if it works in live preview
 
-git branch -M main
-git remote add origin git@github.com:WebBurnout/xochiboda.git
-git push -u origin main
+just removes empty names
+have 'saving...' 'all changes saved'
 
 
-================
+deploy JS for Carlos
+
+need to seed it in production
+
+
+change the url param ?id=
 
 
 
 
-
-data model:
-invitation_time
 
 
 
@@ -29,19 +29,29 @@ email
 
 
 
-needs edit invitation in the admin
 
-should add something where "yes, you may invite whomever you want"
+
+
+seeded Vegetarian list
+
+map links in the invite
+
+data model:
+invitation_time
+
+
+
+
+
+
+needs edit invitation in the admin (adding names for people filling out the form, etc)
 
 link to their invitation on the homepage
 
 sends me an email when they RSVP
 
-
-
 create WA broadcast group for people
 does such a thing exist for messages app
-
 
 
 

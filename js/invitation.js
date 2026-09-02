@@ -37,7 +37,7 @@ export async function loadInvitation() {
   invitationError.set(null)
 
   try {
-    let invitationId = new URL(window.location.href).searchParams.get('invitation')
+    let invitationId = new URL(window.location.href).searchParams.get('id')
 
     if (invitationId !== null) {
       if (!UUID_PATTERN.test(invitationId)) {
@@ -105,6 +105,7 @@ lightElement(function InvitationName() {
 
 lightElement(function InvitationForm({ effect }) {
   const saveError = state('')
+  const saveStatus = state('idle')
   const shownDietNotes = state(new Set())
   let saveTimer = null
   let pendingValues = null
@@ -117,9 +118,6 @@ lightElement(function InvitationForm({ effect }) {
     if (current.attending && current.invitees.length === 0) {
       return 'Please add at least one guest.'
     }
-    if (current.invitees.some((person) => !person.name.trim())) {
-      return 'Every guest needs a name before changes can be saved.'
-    }
     return null
   }
 
@@ -131,15 +129,18 @@ lightElement(function InvitationForm({ effect }) {
     const error = validationError(next)
     if (error) {
       pendingValues = null
+      saveStatus.set('idle')
       saveError.set(error)
       return
     }
 
     if (next.attending === null) {
       pendingValues = null
+      saveStatus.set('idle')
       return
     }
 
+    saveStatus.set('saving')
     saveTimer = setTimeout(savePendingValues, 500)
   }
 
@@ -166,11 +167,13 @@ lightElement(function InvitationForm({ effect }) {
           p_wants_party_house: snapshot.wants_party_house,
           p_special_requirements: snapshot.special_requirements,
           p_message: snapshot.message,
-          p_invitees: snapshot.invitees.map(({ name, is_vegetarian, diet_notes }) => ({
-            name,
-            is_vegetarian,
-            diet_notes,
-          })),
+          p_invitees: snapshot.invitees
+            .filter((person) => person.name.trim())
+            .map(({ name, is_vegetarian, diet_notes }) => ({
+              name,
+              is_vegetarian,
+              diet_notes,
+            })),
         }),
       })
 
@@ -181,12 +184,15 @@ lightElement(function InvitationForm({ effect }) {
         ))
       }
 
+      saveStatus.set('saved')
     } catch (error) {
+      saveStatus.set('idle')
       saveError.set(error instanceof Error ? error.message : 'Unable to save your RSVP.')
     } finally {
       saveInProgress = false
 
       if (pendingValues) {
+        saveStatus.set('saving')
         saveTimer = setTimeout(savePendingValues, 0)
       }
     }
@@ -331,6 +337,10 @@ lightElement(function InvitationForm({ effect }) {
                 </button>
               </div>
 
+              <p>
+                Yes, you may invite as many people as you want. Don&apos;t abuse your power.
+              </p>
+
               <div>
                 <p>Which events will you attend?</p>
 
@@ -456,6 +466,14 @@ lightElement(function InvitationForm({ effect }) {
               <div>
                 ${saveError.get()
                   ? html`<p role="alert">${saveError.get()}</p>`
+                  : ''}
+
+                ${saveStatus.get() !== 'idle'
+                  ? html`
+                      <p role="status">
+                        ${saveStatus.get() === 'saving' ? 'Saving…' : 'All changes saved'}
+                      </p>
+                    `
                   : ''}
               </div>
             `
