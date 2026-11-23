@@ -5,17 +5,132 @@ import {
   state,
 } from 'https://scripts.hot.page/@hot-page/fun@0.0.3'
 import { supabaseConfig } from './config.js'
+import { formatInvitationTime } from './format.js'
 
 const supabase = createClient(supabaseConfig.url, supabaseConfig.anonKey)
 
+const UNCATEGORIZED = 'Uncategorized'
+
 function emptyInvitee() {
-  return { name: '', isVegetarian: false, dietNotes: '' }
+  return { name: '', is_vegetarian: false, diet_notes: '', is_kid: false, age: '' }
+}
+
+function blankInvitation() {
+  return {
+    id: null,
+    name: '',
+    relationship: '',
+    category: '',
+    invitation_time: '',
+    emails: '',
+    is_gringo: false,
+    is_family: false,
+    is_peer: false,
+    attending: null,
+    attends_reception: false,
+    attends_family_dinner: false,
+    attends_tornaboda: false,
+    attends_trip: false,
+    special_requirements: '',
+    message: '',
+    invitees: [emptyInvitee()],
+  }
+}
+
+// An invitation's emails are one comma-separated string, as typed in seed.csv.
+function emailList(value) {
+  return String(value ?? '')
+    .split(',')
+    .map((email) => email.trim())
+    .filter(Boolean)
+}
+
+// <input type="time"> wants HH:MM, but Postgres hands back HH:MM:SS.
+function timeInputValue(value) {
+  return value ? String(value).slice(0, 5) : ''
+}
+
+// Nulls become empty strings so every field is a controlled input.
+function draftFromInvitation(invitation) {
+  return {
+    ...blankInvitation(),
+    ...invitation,
+    category: invitation.category ?? '',
+    invitation_time: timeInputValue(invitation.invitation_time),
+    emails: invitation.emails ?? '',
+    special_requirements: invitation.special_requirements ?? '',
+    message: invitation.message ?? '',
+    invitees: invitation.invitees.length > 0
+      ? invitation.invitees.map((person) => ({
+          name: person.name ?? '',
+          is_vegetarian: person.is_vegetarian ?? false,
+          diet_notes: person.diet_notes ?? '',
+          is_kid: person.is_kid ?? false,
+          age: person.age ?? '',
+        }))
+      : [emptyInvitee()],
+  }
+}
+
+// An admin override can set an event the guest is not normally eligible for, so
+// the cell has to show that rather than flattening it to "n/a".
+function eventCell(isEligible, value) {
+  if (isEligible) return yesNo(value)
+  return value ? 'Yes (override)' : 'n/a'
+}
+
+function categoryOf(invitation) {
+  return invitation.category?.trim() || UNCATEGORIZED
+}
+
+// Counts both invitations and the people on them, because a category is a
+// grouping of invitations but headcount is what drives planning.
+function categoryRollup(invitations) {
+  const totals = new Map()
+
+  for (const invitation of invitations) {
+    const category = categoryOf(invitation)
+    const row = totals.get(category) ?? {
+      category,
+      invitations: 0,
+      people: 0,
+      attending: 0,
+      attendingPeople: 0,
+      declined: 0,
+      pending: 0,
+    }
+
+    row.invitations += 1
+    row.people += invitation.invitees.length
+
+    if (invitation.attending === true) {
+      row.attending += 1
+      row.attendingPeople += invitation.invitees.length
+    } else if (invitation.attending === false) {
+      row.declined += 1
+    } else {
+      row.pending += 1
+    }
+
+    totals.set(category, row)
+  }
+
+  return [...totals.values()].sort((a, b) => {
+    if (a.category === UNCATEGORIZED) return 1
+    if (b.category === UNCATEGORIZED) return -1
+    return b.people - a.people || a.category.localeCompare(b.category)
+  })
+}
+
+// attending is the whole status: null means we do not know, true yes, false no.
+function attendingLabel(attending) {
+  if (attending === true) return 'Attending'
+  if (attending === false) return 'Declined'
+  return 'No answer'
 }
 
 function invitationStatus(invitation) {
-  if (invitation.attending === true) return 'Attending'
-  if (invitation.attending === false) return 'Declined'
-  return 'Pending'
+  return attendingLabel(invitation.attending)
 }
 
 function formatDate(value) {
@@ -39,6 +154,22 @@ function invitationUrl(id, path = '/invitation') {
   return `${path}?id=${encodeURIComponent(id)}`
 }
 
+function copyText(text) {
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.append(textarea)
+  textarea.select()
+
+  try {
+    if (!document.execCommand('copy')) throw new Error('Copy command failed.')
+  } finally {
+    textarea.remove()
+  }
+}
+
 function reactiveProperty(element, name, initialValue) {
   const value = state(initialValue)
   Object.defineProperty(element, name, {
@@ -50,58 +181,76 @@ function reactiveProperty(element, name, initialValue) {
 
 lightElement(function XochibodaInvitations() {
   const items = reactiveProperty(this, 'items', [])
+  const element = this
 
-  function renderTable(invitations) {
+  // Declined invitations only need who they are and what they said.
+  function renderTable(invitations, { brief = false } = {}) {
     return html`
       <table>
         <thead>
           <tr>
             <th scope="col">Name</th>
             <th scope="col">Relationship</th>
-            <th scope="col">RSVP</th>
-            <th scope="col">Invitees</th>
-            <th scope="col">Contact</th>
-            <th scope="col">Reception</th>
-            <th scope="col">Family dinner</th>
-            <th scope="col">Tornaboda</th>
-            <th scope="col">Trip</th>
-            <th scope="col">Party house</th>
-            <th scope="col">Requirements</th>
+            <th scope="col">Category</th>
+            ${brief
+              ? ''
+              : html`
+                  <th scope="col">Time</th>
+                  <th scope="col">RSVP</th>
+                  <th scope="col">Invitees</th>
+                  <th scope="col">Contact</th>
+                  <th scope="col">Reception</th>
+                  <th scope="col">Family dinner</th>
+                  <th scope="col">Tornaboda</th>
+                  <th scope="col">Trip</th>
+                  <th scope="col">Requirements</th>
+                `}
             <th scope="col">Message</th>
             <th scope="col">Responded</th>
-            <th scope="col">Link</th>
+            <th scope="col">Edit</th>
           </tr>
         </thead>
         <tbody>
           ${invitations.map((item) => html`
             <tr>
-              <th scope="row">${item.name}</th>
+              <th scope="row"><a href=${invitationUrl(item.id)}>${item.name}</a></th>
               <td>${item.relationship}</td>
-              <td>${invitationStatus(item)}</td>
-              <td>
-                <ul>
-                  ${item.invitees.map((person) => html`
-                    <li>
-                      ${person.name}${person.is_vegetarian ? ' — vegetarian' : ''}${person.diet_notes ? ` — ${person.diet_notes}` : ''}
-                    </li>
-                  `)}
-                </ul>
-              </td>
-              <td>
-                ${item.email ? html`<a href=${`mailto:${item.email}`}>${item.email}</a>` : '—'}
-                ${item.phone ? html`<br><a href=${`tel:${item.phone}`}>${item.phone}</a>` : ''}
-              </td>
-              <td>${item.is_gringo ? yesNo(item.attends_reception) : 'n/a'}</td>
-              <td>${item.is_family ? yesNo(item.attends_family_dinner) : 'n/a'}</td>
-              <td>${yesNo(item.attends_tornaboda)}</td>
-              <td>${item.is_peer ? yesNo(item.attends_trip) : 'n/a'}</td>
-              <td>${item.is_gringo && !item.is_family ? yesNo(item.wants_party_house) : 'n/a'}</td>
-              <td>${item.special_requirements || '—'}</td>
+              <td>${item.category || '—'}</td>
+              ${brief
+                ? ''
+                : html`
+                    <td>${formatInvitationTime(item.invitation_time) || '—'}</td>
+                    <td>${invitationStatus(item)}</td>
+                    <td>
+                      <ul>
+                        ${item.invitees.map((person) => html`
+                          <li>
+                            ${person.name}${person.is_kid ? ` — kid${person.age === null ? '' : `, ${person.age}`}` : ''}${person.is_vegetarian ? ' — vegetarian' : ''}${person.diet_notes ? ` — ${person.diet_notes}` : ''}
+                          </li>
+                        `)}
+                      </ul>
+                    </td>
+                    <td>${emailList(item.emails).length
+                      ? emailList(item.emails).map((email, index) => html`${index ? ', ' : ''}<a href=${`mailto:${email}`}>${email}</a>`)
+                      : '—'}</td>
+                    <td>${eventCell(item.is_gringo, item.attends_reception)}</td>
+                    <td>${eventCell(item.is_family, item.attends_family_dinner)}</td>
+                    <td>${yesNo(item.attends_tornaboda)}</td>
+                    <td>${eventCell(item.is_peer, item.attends_trip)}</td>
+                    <td>${item.special_requirements || '—'}</td>
+                  `}
               <td>${item.message || '—'}</td>
               <td>${formatDate(item.responded_at)}</td>
               <td>
-                <a href=${invitationUrl(item.id, '/rsvp-2')}>rsvp</a>
-                <a href=${invitationUrl(item.id, '/invitation')}>invite</a>
+                <button
+                  type="button"
+                  @click=${() => element.dispatchEvent(new CustomEvent('edit-invitation', {
+                    bubbles: true,
+                    detail: item,
+                  }))}
+                >
+                  Edit
+                </button>
               </td>
             </tr>
           `)}
@@ -112,18 +261,22 @@ lightElement(function XochibodaInvitations() {
 
   return () => {
     const invitations = items.get()
-    const responded = invitations.filter((item) => item.responded_at !== null)
-    const notResponded = invitations.filter((item) => item.responded_at === null)
+    const attending = invitations.filter((item) => item.attending === true)
+    const declined = invitations.filter((item) => item.attending === false)
+    const unknown = invitations.filter((item) => item.attending === null)
 
     return html`
       <section role="tabpanel" aria-labelledby="invitations-tab">
         <h2>Invitations</h2>
 
-        <h3>Responded — ${responded.length}</h3>
-        ${renderTable(responded)}
+        <h3>Attending — ${attending.length}</h3>
+        ${renderTable(attending)}
 
-        <h3>Not responded — ${notResponded.length}</h3>
-        ${renderTable(notResponded)}
+        <h3>Declined — ${declined.length}</h3>
+        ${renderTable(declined, { brief: true })}
+
+        <h3>No answer — ${unknown.length}</h3>
+        ${renderTable(unknown)}
       </section>
     `
   }
@@ -140,7 +293,9 @@ lightElement(function XochibodaInvitees() {
           <tr>
             <th scope="col">Name</th>
             <th scope="col">Invitation</th>
+            <th scope="col">Category</th>
             <th scope="col">RSVP</th>
+            <th scope="col">Age</th>
             <th scope="col">Vegetarian</th>
             <th scope="col">Dietary notes</th>
           </tr>
@@ -150,7 +305,9 @@ lightElement(function XochibodaInvitees() {
             <tr>
               <td>${person.name}</td>
               <td>${person.invitation_name}</td>
-              <td>${person.invitation_attending === true ? 'Attending' : person.invitation_attending === false ? 'Declined' : 'Pending'}</td>
+              <td>${person.invitation_category || '—'}</td>
+              <td>${attendingLabel(person.invitation_attending)}</td>
+              <td>${person.is_kid ? person.age ?? 'Kid' : '—'}</td>
               <td>${yesNo(person.is_vegetarian)}</td>
               <td>${person.diet_notes || '—'}</td>
             </tr>
@@ -161,167 +318,387 @@ lightElement(function XochibodaInvitees() {
   `
 })
 
-lightElement(function XochibodaNewInvitation() {
-  const invitees = state([emptyInvitee()])
-  const isCreating = state(false)
+lightElement(function XochibodaInvitationEditor() {
+  const categories = reactiveProperty(this, 'categories', [])
+  const draft = state(null)
+  const isSaving = state(false)
   const error = state('')
+  const element = this
+
+  function dialog() {
+    return element.querySelector('dialog')
+  }
+
+  // Opened imperatively so the draft stays inside this element: typing in the
+  // modal must not re-render the invitations table behind it.
+  element.openInvitation = (invitation) => {
+    error.set('')
+    draft.set(invitation ? draftFromInvitation(invitation) : blankInvitation())
+    queueMicrotask(() => {
+      const node = dialog()
+      if (node && !node.open) node.showModal()
+    })
+  }
+
+  function close() {
+    dialog()?.close()
+    draft.set(null)
+  }
+
+  function change(patch) {
+    draft.set({ ...draft.get(), ...patch })
+  }
 
   function changeInvitee(index, patch) {
-    invitees.set(invitees.get().map((person, personIndex) =>
-      personIndex === index ? { ...person, ...patch } : person,
-    ))
+    change({
+      invitees: draft.get().invitees.map((person, personIndex) =>
+        personIndex === index ? { ...person, ...patch } : person,
+      ),
+    })
   }
 
   function addInvitee() {
-    invitees.set([...invitees.get(), emptyInvitee()])
+    change({ invitees: [...draft.get().invitees, emptyInvitee()] })
   }
 
   function removeInvitee(index) {
-    invitees.set(invitees.get().filter((_, personIndex) => personIndex !== index))
+    change({
+      invitees: draft.get().invitees.filter((_, personIndex) => personIndex !== index),
+    })
   }
 
-  async function createInvitation(event) {
+  async function save(event) {
     event.preventDefault()
     error.set('')
 
     const form = event.currentTarget
     if (!form.reportValidity()) return
 
-    const submittedInvitees = invitees.get()
-    if (submittedInvitees.some((person) => !person.name.trim())) {
-      error.set('Every invitee must have a name.')
+    const current = draft.get()
+    const invitees = current.invitees.filter((person) => person.name.trim())
+
+    if (invitees.length === 0) {
+      error.set('Add at least one guest.')
       return
     }
 
-    const formData = new FormData(form)
-    isCreating.set(true)
+    isSaving.set(true)
 
     try {
-      const { data, error: createError } = await supabase.rpc('admin_create_invitation', {
-        p_name: formData.get('name'),
-        p_relationship: formData.get('relationship'),
-        p_email: formData.get('email'),
-        p_phone: formData.get('phone'),
-        p_is_gringo: formData.get('is_gringo') === 'on',
-        p_is_family: formData.get('is_family') === 'on',
-        p_is_peer: formData.get('is_peer') === 'on',
-        p_invitees: submittedInvitees.map((person) => ({
+      const payload = {
+        p_name: current.name,
+        p_relationship: current.relationship,
+        p_category: current.category,
+        p_invitation_time: current.invitation_time,
+        p_emails: current.emails,
+        p_is_gringo: current.is_gringo,
+        p_is_family: current.is_family,
+        p_is_peer: current.is_peer,
+        p_attending: current.attending,
+        p_attends_reception: current.attends_reception,
+        p_attends_family_dinner: current.attends_family_dinner,
+        p_attends_tornaboda: current.attends_tornaboda,
+        p_attends_trip: current.attends_trip,
+        p_special_requirements: current.special_requirements,
+        p_message: current.message,
+        p_invitees: invitees.map((person) => ({
           name: person.name,
-          is_vegetarian: person.isVegetarian,
-          diet_notes: person.dietNotes,
+          is_vegetarian: person.is_vegetarian,
+          diet_notes: person.diet_notes,
+          is_kid: person.is_kid,
+          age: person.is_kid ? person.age : null,
         })),
-      })
+      }
 
-      if (createError) throw createError
+      const { data, error: saveError } = current.id
+        ? await supabase.rpc('admin_update_invitation', {
+            p_invitation_id: current.id,
+            ...payload,
+          })
+        : await supabase.rpc('admin_create_invitation', payload)
 
-      form.reset()
-      invitees.set([emptyInvitee()])
-      this.dispatchEvent(new CustomEvent('invitation-created', {
+      if (saveError) throw saveError
+
+      const wasCreated = !current.id
+      close()
+      element.dispatchEvent(new CustomEvent('invitation-saved', {
         bubbles: true,
-        detail: data,
+        detail: { ...data, created: wasCreated },
       }))
-    } catch (createError) {
-      error.set(createError.message || 'Unable to create the invitation.')
+    } catch (saveError) {
+      error.set(saveError.message || 'Unable to save the invitation.')
     } finally {
-      isCreating.set(false)
+      isSaving.set(false)
     }
   }
 
-  return () => html`
-    <section role="tabpanel" aria-labelledby="new-invitation-tab">
-      <h2>New invitation</h2>
+  function renderEvents(current) {
+    // Same rules save_rsvp applies to guests, read live from the group
+    // checkboxes above, so ticking Family reveals the family dinner at once.
+    const events = [
+      ['attends_reception', 'Reception', current.is_gringo],
+      ['attends_family_dinner', 'Family dinner', current.is_family],
+      ['attends_tornaboda', 'Tornaboda', true],
+      ['attends_trip', 'Trip', current.is_peer],
+    ].filter(([, , isEligible]) => isEligible)
 
-      <form @submit=${createInvitation}>
-        <div>
-          <label>
-            Invitation name
-            <input type="text" name="name" required>
-          </label>
-        </div>
+    if (events.length === 0) return html`<p>No events for these groups.</p>`
 
-        <div>
-          <label>
-            Relationship
-            <input type="text" name="relationship" required>
-          </label>
-        </div>
-
-        <div>
-          <label>
-            Email
-            <input type="email" name="email">
-          </label>
-        </div>
-
-        <div>
-          <label>
-            Phone
-            <input type="tel" name="phone">
-          </label>
-        </div>
-
-        <div>
-          <label><input type="checkbox" name="is_gringo"> Gringo</label>
-          <label><input type="checkbox" name="is_family"> Family</label>
-          <label><input type="checkbox" name="is_peer"> Peer</label>
-        </div>
-
-        <div>
-          <h3>Invitees</h3>
-          ${invitees.get().map((person, index) => html`
-            <div>
-              <p>Guest ${index + 1}</p>
-              <label>
-                Name
-                <input
-                  type="text"
-                  required
-                  .value=${person.name}
-                  @input=${(event) => changeInvitee(index, { name: event.target.value })}
-                >
-              </label>
-
-              <label>
-                <input
-                  type="checkbox"
-                  .checked=${person.isVegetarian}
-                  @change=${(event) => changeInvitee(index, { isVegetarian: event.target.checked })}
-                >
-                Vegetarian
-              </label>
-
-              <label>
-                Dietary notes
-                <textarea
-                  .value=${person.dietNotes}
-                  @input=${(event) => changeInvitee(index, { dietNotes: event.target.value })}
-                ></textarea>
-              </label>
-
-              <button
-                type="button"
-                aria-label="Remove guest"
-                title="Remove guest"
-                @click=${() => removeInvitee(index)}
+    return html`
+      <ul>
+        ${events.map(([field, label]) => html`
+          <li>
+            <label>
+              <input
+                type="checkbox"
+                .checked=${current[field]}
+                @change=${(event) => change({ [field]: event.target.checked })}
               >
-                <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false">
-                  <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-3 6h12l-1 12H7L6 9Zm3 2v8h2v-8H9Zm4 0v8h2v-8h-2Z"></path>
-                </svg>
-              </button>
-            </div>
-          `)}
+              ${label}
+            </label>
+          </li>
+        `)}
+      </ul>
+    `
+  }
 
-          <button type="button" @click=${addInvitee}>Add guest</button>
-        </div>
+  return () => {
+    const current = draft.get()
 
-        ${error.get() ? html`<p role="alert">${error.get()}</p>` : ''}
+    return html`
+      <dialog @close=${() => draft.set(null)}>
+        ${current
+          ? html`
+              <form @submit=${save}>
+                <h2>${current.id ? 'Edit invitation' : 'New invitation'}</h2>
 
-        <button type="submit" ?disabled=${isCreating.get()}>
-          ${isCreating.get() ? 'Creating…' : 'Create invitation'}
-        </button>
-      </form>
-    </section>
-  `
+                <div>
+                  <label>
+                    Invitation name
+                    <input
+                      type="text"
+                      required
+                      .value=${current.name}
+                      @input=${(event) => change({ name: event.target.value })}
+                    >
+                  </label>
+
+                  <label>
+                    Relationship
+                    <input
+                      type="text"
+                      .value=${current.relationship}
+                      @input=${(event) => change({ relationship: event.target.value })}
+                    >
+                  </label>
+
+                  <label>
+                    Category
+                    <input
+                      type="text"
+                      list="invitation-categories"
+                      .value=${current.category}
+                      @input=${(event) => change({ category: event.target.value })}
+                    >
+                  </label>
+                  <datalist id="invitation-categories">
+                    ${categories.get().map((category) => html`<option value=${category}></option>`)}
+                  </datalist>
+
+                  <label>
+                    Invitation time
+                    <input
+                      type="time"
+                      .value=${current.invitation_time}
+                      @input=${(event) => change({ invitation_time: event.target.value })}
+                    >
+                  </label>
+
+                  <label>
+                    Emails
+                    <input
+                      type="email"
+                      multiple
+                      .value=${current.emails}
+                      @input=${(event) => change({ emails: event.target.value })}
+                    >
+                  </label>
+                </div>
+
+                <div>
+                  <h3>Groups</h3>
+                  <label>
+                    <input
+                      type="checkbox"
+                      .checked=${current.is_gringo}
+                      @change=${(event) => change({ is_gringo: event.target.checked })}
+                    >
+                    Gringo
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      .checked=${current.is_family}
+                      @change=${(event) => change({ is_family: event.target.checked })}
+                    >
+                    Family
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      .checked=${current.is_peer}
+                      @change=${(event) => change({ is_peer: event.target.checked })}
+                    >
+                    Peer
+                  </label>
+                </div>
+
+                <div>
+                  <h3>RSVP</h3>
+
+                  <label>
+                    <input
+                      type="radio"
+                      name="attending"
+                      .checked=${current.attending === null}
+                      @change=${() => change({ attending: null })}
+                    >
+                    No answer
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="attending"
+                      .checked=${current.attending === true}
+                      @change=${() => change({ attending: true })}
+                    >
+                    Attending
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="attending"
+                      .checked=${current.attending === false}
+                      @change=${() => change({ attending: false })}
+                    >
+                    Declined
+                  </label>
+                </div>
+
+                <div>
+                  <h3>Events</h3>
+                  ${renderEvents(current)}
+                </div>
+
+                <div>
+                  <h3>Guests</h3>
+                  ${current.invitees.map((person, index) => html`
+                    <div>
+                      <p>Guest ${index + 1}</p>
+
+                      <label>
+                        Name
+                        <input
+                          type="text"
+                          required
+                          .value=${person.name}
+                          @input=${(event) => changeInvitee(index, { name: event.target.value })}
+                        >
+                      </label>
+
+                      <label>
+                        <input
+                          type="checkbox"
+                          .checked=${person.is_vegetarian}
+                          @change=${(event) => changeInvitee(index, { is_vegetarian: event.target.checked })}
+                        >
+                        Vegetarian
+                      </label>
+
+                      <label>
+                        <input
+                          type="checkbox"
+                          .checked=${person.is_kid}
+                          @change=${(event) => changeInvitee(index, {
+                            is_kid: event.target.checked,
+                            age: event.target.checked ? person.age : '',
+                          })}
+                        >
+                        Kid
+                      </label>
+
+                      ${person.is_kid
+                        ? html`
+                            <label>
+                              Age
+                              <input
+                                type="number"
+                                min="0"
+                                max="120"
+                                step="1"
+                                .value=${person.age}
+                                @input=${(event) => changeInvitee(index, { age: event.target.value })}
+                              >
+                            </label>
+                          `
+                        : ''}
+
+                      <label>
+                        Dietary notes
+                        <textarea
+                          .value=${person.diet_notes}
+                          @input=${(event) => changeInvitee(index, { diet_notes: event.target.value })}
+                        ></textarea>
+                      </label>
+
+                      <button
+                        type="button"
+                        aria-label="Remove guest"
+                        title="Remove guest"
+                        @click=${() => removeInvitee(index)}
+                      >
+                        <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false">
+                          <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-3 6h12l-1 12H7L6 9Zm3 2v8h2v-8H9Zm4 0v8h2v-8h-2Z"></path>
+                        </svg>
+                      </button>
+                    </div>
+                  `)}
+
+                  <button type="button" @click=${addInvitee}>Add guest</button>
+                </div>
+
+                <div>
+                  <label>
+                    Special requirements
+                    <textarea
+                      .value=${current.special_requirements}
+                      @input=${(event) => change({ special_requirements: event.target.value })}
+                    ></textarea>
+                  </label>
+
+                  <label>
+                    Message
+                    <textarea
+                      .value=${current.message}
+                      @input=${(event) => change({ message: event.target.value })}
+                    ></textarea>
+                  </label>
+                </div>
+
+                ${error.get() ? html`<p role="alert">${error.get()}</p>` : ''}
+
+                <div>
+                  <button type="submit" ?disabled=${isSaving.get()}>
+                    ${isSaving.get() ? 'Saving…' : 'Save'}
+                  </button>
+                  <button type="button" @click=${close}>Cancel</button>
+                </div>
+              </form>
+            `
+          : ''}
+      </dialog>
+    `
+  }
 })
 
 lightElement(`
@@ -334,7 +711,7 @@ lightElement(`
     --accent: #7b3148;
     --accent-dark: #5e2135;
     display: block;
-    max-width: 96rem;
+    padding: 1rem;
     color: var(--ink);
     line-height: 1.5;
   }
@@ -428,40 +805,81 @@ lightElement(`
     opacity: 0.55;
   }
 
+  :scope nav {
+    margin-block-start: 2.5rem;
+  }
+
   :scope [role='tablist'] {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.5rem;
+    gap: 0.25rem;
+    padding-inline: 0.75rem;
+  }
+
+  /* The tabs overlap the panel's top border by 1px so the selected tab, which
+     shares the panel's background and has no bottom border, reads as part of
+     the panel. */
+  :scope [role='tab'] {
+    position: relative;
+    margin-block-end: -1px;
+    border: 1px solid var(--line);
+    border-block-end: 0;
+    border-radius: 0.5rem 0.5rem 0 0;
   }
 
   :scope [role='tab'][aria-selected='false'] {
+    background: var(--wash);
+    color: var(--muted);
+  }
+
+  :scope [role='tab'][aria-selected='false']:hover {
     border-color: var(--line);
-    background: transparent;
+    background: var(--paper);
     color: var(--ink);
   }
 
   :scope [role='tab'][aria-selected='true'] {
-    box-shadow: inset 0 -3px 0 white;
+    background: var(--paper);
+    color: var(--accent);
+    cursor: default;
+  }
+
+  :scope [role='tab'][aria-selected='true']:hover {
+    border-color: var(--line);
   }
 
   :scope [role='tabpanel'] {
     overflow-x: auto;
+    margin-block-start: 0;
   }
 
   :scope table {
     width: 100%;
-    min-width: 70rem;
     border-collapse: collapse;
     font-size: 0.9rem;
+  }
+
+  :scope table + h3 {
+    margin-block-start: 2rem;
+  }
+
+  /* Only the two wide data tables need a floor to stay readable. The summary,
+     diet, and kid tables are narrow and should size to their own content
+     rather than being stretched to the same width. */
+  :scope xochiboda-invitations table,
+  :scope xochiboda-invitees table {
+    min-width: 70rem;
   }
 
   :scope xochiboda-invitations table {
     margin-block-end: 2rem;
   }
 
+  /* Padding is charged once per column, so on the 16-column invitations table
+     it alone accounts for several hundred pixels of width. */
   :scope th,
   :scope td {
-    padding: 0.8rem;
+    padding: 0.55rem;
     border-bottom: 1px solid var(--line);
     text-align: left;
     vertical-align: top;
@@ -481,8 +899,20 @@ lightElement(`
     background: color-mix(in srgb, var(--wash) 55%, transparent);
   }
 
+  /* A row of buttons in one cell, as in the unsent list. */
+  :scope td > div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+
+  :scope td > div button {
+    min-height: 0;
+    padding: 0.3rem 0.6rem;
+  }
+
   :scope td ul {
-    min-width: 10rem;
+    min-width: 8rem;
     margin: 0;
     padding-inline-start: 1rem;
   }
@@ -497,6 +927,35 @@ lightElement(`
     display: grid;
     gap: 1rem;
     max-width: 48rem;
+  }
+
+  :scope dialog {
+    width: min(48rem, 92vw);
+    max-height: 88vh;
+    padding: clamp(1rem, 2vw, 2rem);
+    border: 1px solid var(--line);
+    border-radius: 0.75rem;
+    background: var(--paper);
+    color: var(--ink);
+  }
+
+  :scope dialog::backdrop {
+    background: rgb(41 36 33 / 45%);
+  }
+
+  :scope dialog form > div {
+    padding-block: 0.75rem;
+    border-top: 1px solid var(--line);
+  }
+
+  :scope dialog h2 {
+    margin-block-end: 0;
+  }
+
+  :scope dialog ul {
+    margin: 0;
+    padding-inline-start: 1rem;
+    list-style: none;
   }
 
   :scope > form {
@@ -520,9 +979,14 @@ lightElement(`
     font-weight: 650;
   }
 
-  :scope label:has(> input[type='checkbox']) {
+  /* Shrink to the control and its text. A block-level label would stretch the
+     full width of the form column and make the whole empty row clickable. */
+  :scope label:has(> input[type='checkbox']),
+  :scope label:has(> input[type='radio']) {
     display: flex;
     align-items: center;
+    gap: 0.45rem;
+    width: fit-content;
   }
 
   :scope input,
@@ -536,9 +1000,14 @@ lightElement(`
     font: inherit;
   }
 
-  :scope input[type='checkbox'] {
+  /* Without this radios fall through to the generic input rule above and get
+     stretched to 100% with text-field padding. */
+  :scope input[type='checkbox'],
+  :scope input[type='radio'] {
+    flex: none;
     width: 1.1rem;
     height: 1.1rem;
+    padding: 0;
     accent-color: var(--accent);
   }
 
@@ -555,6 +1024,15 @@ lightElement(`
   :scope summary {
     font-weight: 700;
     cursor: pointer;
+  }
+
+  /* Only divide details from each other, not from whatever precedes the group. */
+  :scope :not(details) + details {
+    border-top: 0;
+  }
+
+  :scope details[open] > summary {
+    margin-block-end: 1rem;
   }
 
   :scope details > :not(summary) {
@@ -584,18 +1062,29 @@ lightElement(`
       padding: 1rem;
     }
 
+    :scope [role='tablist'] {
+      padding-inline: 0;
+    }
+
+    :scope [role='tabpanel'] {
+      border-start-start-radius: 0;
+    }
+
     :scope [role='tablist'] button {
-      flex: 1 1 100%;
+      flex: 1 1 0;
     }
   }
 `, function XochibodaAdmin({ effect }) {
+  const element = this
   const session = state(null)
   const authReady = state(false)
   const dashboard = state(null)
   const isLoading = state(false)
-  const activeTab = state('invitations')
+  const activeTab = state(null)
   const error = state('')
   const notice = state('')
+  const markingSent = state(null)
+  const copiedLink = state(null)
 
   effect(() => {
     let connected = true
@@ -662,10 +1151,105 @@ lightElement(`
     if (signOutError) error.set(signOutError.message)
   }
 
-  async function invitationCreated(event) {
-    activeTab.set('invitations')
+  function openEditor(invitation) {
+    element.querySelector('xochiboda-invitation-editor')?.openInvitation(invitation)
+  }
+
+  async function invitationSaved(event) {
+    // A new invitation is unsent, so the default tab is where it shows up.
+    if (event.detail.created) activeTab.set(null)
     await loadDashboard()
-    notice.set(`Invitation created: ${invitationUrl(event.detail.id)}`)
+    notice.set(event.detail.created
+      ? `Invitation created: ${invitationUrl(event.detail.id)}`
+      : `Saved ${event.detail.name}.`)
+  }
+
+  async function markSent(invitation) {
+    error.set('')
+    notice.set('')
+    markingSent.set(invitation.id)
+
+    try {
+      const { error: sentError } = await supabase.rpc('admin_mark_invitation_sent', {
+        p_invitation_id: invitation.id,
+      })
+      if (sentError) throw sentError
+      await loadDashboard()
+      notice.set(`Marked ${invitation.name} as sent.`)
+    } catch (sentError) {
+      error.set(sentError.message || 'Unable to mark the invitation as sent.')
+    } finally {
+      markingSent.set(null)
+    }
+  }
+
+  function copyEmails(emails) {
+    error.set('')
+    notice.set('')
+
+    try {
+      copyText(emails.join(', '))
+      notice.set('Copied emails.')
+    } catch (copyError) {
+      error.set(copyError.message || 'Unable to copy the emails.')
+    }
+  }
+
+  // Confirmed on the button itself, because the notice area is at the top of
+  // the page and well out of view of the unsent list.
+  function copyLink(invitation) {
+    error.set('')
+    notice.set('')
+
+    try {
+      copyText(new URL(invitationUrl(invitation.id), document.baseURI).href)
+      copiedLink.set(invitation.id)
+      setTimeout(() => {
+        if (copiedLink.get() === invitation.id) copiedLink.set(null)
+      }, 2000)
+    } catch (copyError) {
+      error.set(copyError.message || 'Unable to copy the link.')
+    }
+  }
+
+  function renderUnsent(unsent) {
+    return html`
+      <section role="tabpanel" aria-labelledby="unsent-tab">
+        <h2>Not sent</h2>
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Category</th>
+              <th scope="col"></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${unsent.map((item) => html`
+              <tr>
+                <th scope="row">${item.name}</th>
+                <td>${item.category || '—'}</td>
+                <td>
+                  <div>
+                    <button type="button" @click=${() => copyLink(item)}>
+                      ${copiedLink.get() === item.id ? 'Copied' : 'Copy link'}
+                    </button>
+                    <button
+                      type="button"
+                      ?disabled=${markingSent.get() !== null}
+                      @click=${() => markSent(item)}
+                    >
+                      ${markingSent.get() === item.id ? 'Saving…' : 'Mark as sent'}
+                    </button>
+                    <button type="button" @click=${() => openEditor(item)}>Edit</button>
+                  </div>
+                </td>
+              </tr>
+            `)}
+          </tbody>
+        </table>
+      </section>
+    `
   }
 
   function renderLogin() {
@@ -697,10 +1281,28 @@ lightElement(`
       person.invitation_attending === true &&
       (person.is_vegetarian || person.diet_notes?.trim()),
     ) ?? []
+    const kids = data?.invitees.filter((person) => person.is_kid) ?? []
+    const unsent = data?.invitations.filter((item) => !item.sent_at) ?? []
+    // The unsent tab leads while there is anything left to send, and drops out
+    // once everything is sent, even if it was the selected tab.
+    const tab = activeTab.get() === 'unsent' && !unsent.length
+      ? 'invitations'
+      : activeTab.get() ?? (unsent.length ? 'unsent' : 'invitations')
+    // Declined guests are done with us, so they are left off the mailing list.
+    const emails = (data?.invitations ?? [])
+      .filter((item) => item.attending !== false)
+      .flatMap((item) => emailList(item.emails))
+    const rollup = data ? categoryRollup(data.invitations) : []
+    const knownCategories = [...new Set(
+      (data?.invitations ?? [])
+        .map((item) => item.category?.trim())
+        .filter(Boolean),
+    )].sort()
 
     return html`
       <header>
         <p>Signed in as ${session.get().user.email}</p>
+        <button type="button" @click=${() => openEditor(null)}>New invitation</button>
         <button type="button" @click=${loadDashboard}>Refresh</button>
         <button type="button" @click=${signOut}>Sign out</button>
       </header>
@@ -715,16 +1317,56 @@ lightElement(`
               <h2 id="summary-heading">Summary</h2>
               <dl>
                 <div><dt>Invitations</dt><dd>${data.summary.total_invitations}</dd></div>
-                <div><dt>Responded</dt><dd>${data.summary.responded}</dd></div>
+                <div><dt>Attending</dt><dd>${data.summary.attending}</dd></div>
                 <div><dt>Declined</dt><dd>${data.summary.declined}</dd></div>
-                <div><dt>Pending invitations</dt><dd>${data.summary.pending}</dd></div>
-                <div><dt>Pending people</dt><dd>${data.invitees.filter((person) => person.invitation_attending === null).length}</dd></div>
+                <div><dt>No answer</dt><dd>${data.summary.unknown}</dd></div>
+                <div><dt>No answer, people</dt><dd>${data.invitees.filter((person) => person.invitation_attending === null).length}</dd></div>
                 <div><dt>Attending people</dt><dd>${data.summary.attending_guests}</dd></div>
                 <div><dt>Vegetarians</dt><dd>${data.summary.vegetarian_guests}</dd></div>
+                <div><dt>Kids</dt><dd>${data.summary.kid_guests}</dd></div>
               </dl>
 
+              <h3>Categories</h3>
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Category</th>
+                    <th scope="col">Invitations</th>
+                    <th scope="col">People</th>
+                    <th scope="col">Attending</th>
+                    <th scope="col">Attending people</th>
+                    <th scope="col">Declined</th>
+                    <th scope="col">No answer</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rollup.map((row) => html`
+                    <tr>
+                      <th scope="row">${row.category}</th>
+                      <td>${row.invitations}</td>
+                      <td>${row.people}</td>
+                      <td>${row.attending}</td>
+                      <td>${row.attendingPeople}</td>
+                      <td>${row.declined}</td>
+                      <td>${row.pending}</td>
+                    </tr>
+                  `)}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <th scope="row">Total</th>
+                    <td>${rollup.reduce((total, row) => total + row.invitations, 0)}</td>
+                    <td>${rollup.reduce((total, row) => total + row.people, 0)}</td>
+                    <td>${rollup.reduce((total, row) => total + row.attending, 0)}</td>
+                    <td>${rollup.reduce((total, row) => total + row.attendingPeople, 0)}</td>
+                    <td>${rollup.reduce((total, row) => total + row.declined, 0)}</td>
+                    <td>${rollup.reduce((total, row) => total + row.pending, 0)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+
               <h3>People at each event</h3>
-              ${['ceremony', ...Object.keys(data.events)].map((eventName) => {
+              ${['family_dinner', 'reception', 'ceremony', 'tornaboda', 'trip'].map((eventName) => {
                 const eventField = {
                   reception: 'attends_reception',
                   family_dinner: 'attends_family_dinner',
@@ -760,7 +1402,7 @@ lightElement(`
                 return html`
                   <details>
                     <summary>
-                      ${eventLabel(eventName)} — ${people.length} confirmed / ${pendingPeople.length} pending
+                      ${eventLabel(eventName)} — ${people.length} confirmed / ${pendingPeople.length} unanswered
                     </summary>
 
                     <h4>People</h4>
@@ -827,13 +1469,67 @@ lightElement(`
                 : html`<p>No vegetarian guests or dietary requirements yet.</p>`}
             </details>
 
+            <details>
+              <summary>Kids — ${kids.length}</summary>
+              ${kids.length
+                ? html`
+                    <table>
+                      <thead>
+                        <tr>
+                          <th scope="col">Name</th>
+                          <th scope="col">Age</th>
+                          <th scope="col">Invitation</th>
+                          <th scope="col">RSVP</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        ${kids.map((person) => html`
+                          <tr>
+                            <th scope="row">${person.name}</th>
+                            <td>${person.age ?? '—'}</td>
+                            <td>${person.invitation_name}</td>
+                            <td>${attendingLabel(person.invitation_attending)}</td>
+                          </tr>
+                        `)}
+                      </tbody>
+                    </table>
+                  `
+                : html`<p>No kids yet.</p>`}
+            </details>
+
+            <details>
+              <summary>Emails</summary>
+              ${emails.length
+                ? html`
+                    <label>
+                      All emails, except declined invitations
+                      <textarea readonly .value=${emails.join(', ')}></textarea>
+                    </label>
+                    <button type="button" @click=${() => copyEmails(emails)}>Copy emails</button>
+                  `
+                : html`<p>No emails yet.</p>`}
+            </details>
+
             <nav aria-label="Admin sections">
               <div role="tablist">
+                ${unsent.length
+                  ? html`
+                      <button
+                        id="unsent-tab"
+                        type="button"
+                        role="tab"
+                        aria-selected=${tab === 'unsent' ? 'true' : 'false'}
+                        @click=${() => activeTab.set('unsent')}
+                      >
+                        Not sent — ${unsent.length}
+                      </button>
+                    `
+                  : ''}
                 <button
                   id="invitations-tab"
                   type="button"
                   role="tab"
-                  aria-selected=${activeTab.get() === 'invitations' ? 'true' : 'false'}
+                  aria-selected=${tab === 'invitations' ? 'true' : 'false'}
                   @click=${() => activeTab.set('invitations')}
                 >
                   Invitations
@@ -842,35 +1538,36 @@ lightElement(`
                   id="invitees-tab"
                   type="button"
                   role="tab"
-                  aria-selected=${activeTab.get() === 'invitees' ? 'true' : 'false'}
+                  aria-selected=${tab === 'invitees' ? 'true' : 'false'}
                   @click=${() => activeTab.set('invitees')}
                 >
                   Invitees
-                </button>
-                <button
-                  id="new-invitation-tab"
-                  type="button"
-                  role="tab"
-                  aria-selected=${activeTab.get() === 'new' ? 'true' : 'false'}
-                  @click=${() => activeTab.set('new')}
-                >
-                  New invitation
                 </button>
               </div>
             </nav>
 
             ${(() => {
-              switch (activeTab.get()) {
+              switch (tab) {
+                case 'unsent':
+                  return renderUnsent(unsent)
                 case 'invitations':
-                  return html`<xochiboda-invitations .items=${data.invitations}></xochiboda-invitations>`
+                  return html`
+                    <xochiboda-invitations
+                      .items=${data.invitations}
+                      @edit-invitation=${(event) => openEditor(event.detail)}
+                    ></xochiboda-invitations>
+                  `
                 case 'invitees':
                   return html`<xochiboda-invitees .items=${data.invitees}></xochiboda-invitees>`
-                case 'new':
-                  return html`<xochiboda-new-invitation @invitation-created=${invitationCreated}></xochiboda-new-invitation>`
                 default:
                   return html``
               }
             })()}
+
+            <xochiboda-invitation-editor
+              .categories=${knownCategories}
+              @invitation-saved=${invitationSaved}
+            ></xochiboda-invitation-editor>
           `
         : ''}
     `

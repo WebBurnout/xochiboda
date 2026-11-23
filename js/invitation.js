@@ -4,9 +4,33 @@ import {
   state,
 } from 'https://scripts.hot.page/@hot-page/fun@0.0.3'
 import { supabaseConfig } from './config.js'
+import { formatInvitationTime } from './format.js'
+import { copy } from './language.js'
+import {
+  INVITATION_STORAGE_KEY,
+  UUID_PATTERN,
+  rememberInvitationId,
+} from './invitation-storage.js'
 
-const INVITATION_STORAGE_KEY = 'xochiboda.invitationId'
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+// Mirrors the invitation's group flags onto the root element so static markup
+// can show and hide sections with plain CSS.
+const GROUP_CLASSES = ['is_gringo', 'is_family', 'is_peer']
+
+function applyGroupClasses(data) {
+  for (const groupClass of GROUP_CLASSES) {
+    document.documentElement.classList.toggle(groupClass, data?.[groupClass] === true)
+  }
+}
+
+
+// Root classes let the static markup show an error state with plain CSS:
+// `has-error` whenever we could not show an invitation, plus `has-404-error`
+// when that is because there is no such invitation.
+function setLoadState(errorClass) {
+  const root = document.documentElement
+  root.classList.toggle('has-error', errorClass !== null)
+  root.classList.toggle('has-404-error', errorClass === 'has-404-error')
+}
 
 export const invitation = state(null)
 export const invitationStatus = state('idle')
@@ -35,15 +59,19 @@ async function getResponseError(response, fallback) {
 export async function loadInvitation() {
   invitationStatus.set('loading')
   invitationError.set(null)
+  document.documentElement.classList.remove('has-error', 'has-404-error')
 
   try {
     let invitationId = new URL(window.location.href).searchParams.get('id')
 
     if (invitationId !== null) {
+      // A malformed ID can never match an invitation, so treat it as not found
+      // rather than falling back to the remembered one.
       if (!UUID_PATTERN.test(invitationId)) {
-        throw new Error('The invitation link is invalid.')
+        invitationId = null
+      } else {
+        rememberInvitationId(invitationId)
       }
-      localStorage.setItem(INVITATION_STORAGE_KEY, invitationId)
     } else {
       invitationId = localStorage.getItem(INVITATION_STORAGE_KEY)
       if (invitationId && !UUID_PATTERN.test(invitationId)) {
@@ -54,9 +82,9 @@ export async function loadInvitation() {
 
     if (!invitationId) {
       invitation.set(null)
+      applyGroupClasses(null)
       invitationStatus.set('not-found')
-      document.documentElement.classList.remove('is-loading')
-      document.documentElement.classList.add('is-not-found')
+      setLoadState('has-404-error')
       return
     }
 
@@ -70,38 +98,85 @@ export async function loadInvitation() {
     if (!response.ok) {
       throw new Error(await getResponseError(
         response,
-        `Unable to load invitation (${response.status}).`,
+        copy.loadFailed(response.status),
       ))
     }
 
     const data = await response.json()
     if (!data) {
       invitation.set(null)
+      applyGroupClasses(null)
       invitationStatus.set('not-found')
-      document.documentElement.classList.remove('is-loading')
-      document.documentElement.classList.add('is-not-found')
+      setLoadState('has-404-error')
       return
     }
 
     invitation.set(data)
+    applyGroupClasses(data)
     invitationStatus.set('loaded')
-    document.documentElement.classList.remove('is-loading', 'is-not-found')
+    setLoadState(null)
   } catch (error) {
     invitation.set(null)
-    invitationError.set(error instanceof Error ? error.message : 'Unable to load invitation.')
+    applyGroupClasses(null)
+    invitationError.set(error instanceof Error ? error.message : copy.loadFailedGeneric)
     invitationStatus.set('error')
-    document.documentElement.classList.remove('is-loading')
-    document.documentElement.classList.add('is-not-found')
+    setLoadState('has-error')
   }
 }
 
 lightElement(function InvitationName() {
   return () => html`
-    <span>${invitation.get()?.name ?? ''}</span>
-    <br />
-    <span>${invitation.get()?.relationship ?? ''}</span>
+    <div>${invitation.get()?.name ?? ''}</div>
+    <div class="relationship">${invitation.get()?.relationship ?? ''}</div>
   `
 })
+
+lightElement(function InvitationTime() {
+  return () => html`
+    <span>${formatInvitationTime(invitation.get()?.invitation_time)}</span>
+  `
+})
+
+function burstConfetti(button) {
+  button.animate(
+    [
+      {
+        opacity: 1,
+        boxShadow: '0 0 #ff007f, 0 0 #00f0ff, 0 0 #ffeb3b, 0 0 #4caf50, 0 0 #ff5722, 0 0 #9c27b0, 0 0 #3f51b5, 0 0 #009688',
+      },
+      {
+        opacity: 0,
+        boxShadow: '-50px -60px #ff007f, 60px -70px #00f0ff, -70px 50px #ffeb3b, 60px 60px #4caf50, -80px -10px #ff5722, 80px -20px #9c27b0, -30px 80px #3f51b5, 30px -80px #009688',
+      },
+    ],
+    { duration: 600, easing: 'ease-out', pseudoElement: '::before' },
+  )
+
+  button.animate(
+    [
+      {
+        opacity: 1,
+        boxShadow: '0 0 #e91e63, 0 0 #03a9f4, 0 0 #ffc107, 0 0 #8bc34a, 0 0 #ff9800, 0 0 #e040fb, 0 0 #00e676, 0 0 #ff3d00',
+      },
+      {
+        opacity: 0,
+        boxShadow: '-90px -40px #e91e63, 100px -50px #03a9f4, -40px -90px #ffc107, 50px -100px #8bc34a, -100px 30px #ff9800, 90px 50px #e040fb, -50px 100px #00e676, 70px 90px #ff3d00',
+      },
+    ],
+    { duration: 600, easing: 'ease-out', pseudoElement: '::after' },
+  )
+}
+
+function floatPoop(button) {
+  button.animate(
+    [
+      { opacity: 1, transform: 'translate(-50%, -50%)', easing: 'ease-out' },
+      { opacity: 1, offset: 0.25, easing: 'ease-out' },
+      { opacity: 0, transform: 'translate(-50%, calc(-50% - 60px))' },
+    ],
+    { duration: 1200, pseudoElement: '::before' },
+  )
+}
 
 lightElement(function InvitationForm({ effect }) {
   const saveError = state('')
@@ -116,7 +191,7 @@ lightElement(function InvitationForm({ effect }) {
   function validationError(current) {
     if (current.attending === null) return null
     if (current.attending && current.invitees.length === 0) {
-      return 'Please add at least one guest.'
+      return copy.needOneGuest
     }
     return null
   }
@@ -152,7 +227,7 @@ lightElement(function InvitationForm({ effect }) {
     saveInProgress = true
 
     try {
-      if (!snapshot.id) throw new Error('No invitation is loaded.')
+      if (!snapshot.id) throw new Error(copy.noInvitationLoaded)
 
       const response = await fetch(`${supabaseConfig.url}/rest/v1/rpc/save_rsvp`, {
         method: 'POST',
@@ -164,15 +239,16 @@ lightElement(function InvitationForm({ effect }) {
           p_attends_family_dinner: snapshot.attends_family_dinner,
           p_attends_tornaboda: snapshot.attends_tornaboda,
           p_attends_trip: snapshot.attends_trip,
-          p_wants_party_house: snapshot.wants_party_house,
           p_special_requirements: snapshot.special_requirements,
           p_message: snapshot.message,
           p_invitees: snapshot.invitees
             .filter((person) => person.name.trim())
-            .map(({ name, is_vegetarian, diet_notes }) => ({
+            .map(({ name, is_vegetarian, diet_notes, is_kid, age }) => ({
               name,
               is_vegetarian,
               diet_notes,
+              is_kid,
+              age: is_kid ? age : null,
             })),
         }),
       })
@@ -180,14 +256,14 @@ lightElement(function InvitationForm({ effect }) {
       if (!response.ok) {
         throw new Error(await getResponseError(
           response,
-          `Unable to save RSVP (${response.status}).`,
+          copy.saveFailed(response.status),
         ))
       }
 
       saveStatus.set('saved')
     } catch (error) {
       saveStatus.set('idle')
-      saveError.set(error instanceof Error ? error.message : 'Unable to save your RSVP.')
+      saveError.set(error instanceof Error ? error.message : copy.saveFailedGeneric)
     } finally {
       saveInProgress = false
 
@@ -216,7 +292,7 @@ lightElement(function InvitationForm({ effect }) {
     change({
       invitees: [
         ...invitation.get().invitees,
-        { name: '', is_vegetarian: false, diet_notes: '' },
+        { name: '', is_vegetarian: false, diet_notes: '', is_kid: false, age: '' },
       ],
     })
   }
@@ -236,40 +312,55 @@ lightElement(function InvitationForm({ effect }) {
     })
   }
 
+  // Each attendance button is `true` when it is the answer, `false` when the
+  // other one is, and `indeterminate` before either has been chosen.
+  function attendanceState(attending, value) {
+    if (attending === null || attending === undefined) return 'indeterminate'
+    return attending === value ? 'true' : 'false'
+  }
+
   return () => {
     if (!invitation.get()) return html``
 
     const form = invitation.get()
 
     return html`
-      <form @submit=${(event) => event.preventDefault()}>
-        <div role="group" aria-label="Attendance">
+      <form class="invitation-form" @submit=${(event) => event.preventDefault()}>
+        <div class="attendance" role="group" aria-label="Attendance">
           <button
+            class="attendance-button confetti yes"
             type="button"
             aria-pressed=${form.attending === true ? 'true' : 'false'}
-            @click=${() => change({ attending: true })}
+            data-state=${attendanceState(form.attending, true)}
+            @click=${(event) => {
+              burstConfetti(event.currentTarget)
+              change({ attending: true })
+            }}
           >
-            We will be attending
+            ${copy.attendingYes}
           </button>
 
           <button
+            class="attendance-button poopy no"
             type="button"
             aria-pressed=${form.attending === false ? 'true' : 'false'}
-            @click=${() => change({ attending: false })}
+            data-state=${attendanceState(form.attending, false)}
+            @click=${(event) => {
+              floatPoop(event.currentTarget)
+              change({ attending: false })
+            }}
           >
-            Sorry we can't make it
+            ${copy.attendingNo}
           </button>
         </div>
 
         ${form.attending === true
           ? html`
-              <div>
+              <div class="guests">
                 ${form.invitees.map((person, index) => html`
-                  <div>
-                    <p>Guest ${index + 1}</p>
-
-                    <label>
-                      Name
+                  <div class="guest">
+                    <label class="field name">
+                      ${copy.name}
                       <input
                         type="text"
                         required
@@ -277,84 +368,119 @@ lightElement(function InvitationForm({ effect }) {
                         .value=${person.name}
                         @input=${(event) => changeInvitee(index, { name: event.target.value })}
                       >
+                      <button
+                        class="remove-guest"
+                        type="button"
+                        aria-label=${copy.removeGuest}
+                        title=${copy.removeGuest}
+                        @click=${() => removeInvitee(index)}
+                      >
+                        <svg
+                          class="remove-guest-icon"
+                          viewBox="0 0 24 24"
+                          width="24"
+                          height="24"
+                          aria-hidden="true"
+                          focusable="false"
+                        >
+                          <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-3 6h12l-1 12H7L6 9Zm3 2v8h2v-8H9Zm4 0v8h2v-8h-2Z"></path>
+                        </svg>
+                      </button>
                     </label>
 
-                    <label>
-                      <input
-                        type="checkbox"
-                        .checked=${person.is_vegetarian}
-                        @change=${(event) => changeInvitee(index, { is_vegetarian: event.target.checked })}
-                      >
-                      Vegetarian
-                    </label>
+                    <div class="checkbox-row">
+                      <label class="checkbox vegetarian">
+                        <input
+                          type="checkbox"
+                          .checked=${person.is_vegetarian}
+                          @change=${(event) => changeInvitee(index, { is_vegetarian: event.target.checked })}
+                        >
+                        ${copy.vegetarian}
+                        ${person.diet_notes?.trim() || shownDietNotes.get().has(index)
+                          ? ''
+                          : html`
+                              <button
+                                type="button"
+                                class="show-diet-notes"
+                                @click=${(event) => {
+                                  event.preventDefault()
+                                  showDietNotes(index)
+                                  changeInvitee(index, { is_vegetarian: true })
+                                }}
+                              >
+                                ${copy.dietNotesLink}
+                              </button>
+                            `}
+                      </label>
 
-                    ${person.diet_notes?.trim() || shownDietNotes.get().has(index)
-                      ? html`
-                          <label>
-                            Dietary notes
-                            <textarea
-                              .value=${person.diet_notes}
-                              @input=${(event) => {
-                                showDietNotes(index)
-                                changeInvitee(index, { diet_notes: event.target.value })
-                              }}
-                            ></textarea>
-                          </label>
-                        `
-                      : html`
-                          <a
-                            href="#"
-                            @click=${(event) => {
-                              event.preventDefault()
-                              showDietNotes(index)
-                            }}
-                          >
-                            It's more complicated
-                          </a>
-                        `}
+                      ${person.diet_notes?.trim() || shownDietNotes.get().has(index)
+                        ? html`
+                            <label class="field diet-notes">
+                              ${copy.dietNotes}
+                              <textarea
+                                .value=${person.diet_notes}
+                                @input=${(event) => {
+                                  showDietNotes(index)
+                                  changeInvitee(index, { diet_notes: event.target.value })
+                                }}
+                              ></textarea>
+                            </label>
+                          `
+                        : ''}
+                    </div>
 
-                    <button
-                      type="button"
-                      aria-label="Remove guest"
-                      title="Remove guest"
-                      @click=${() => removeInvitee(index)}
-                    >
-                      <svg
-                        viewBox="0 0 24 24"
-                        width="24"
-                        height="24"
-                        aria-hidden="true"
-                        focusable="false"
-                      >
-                        <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-3 6h12l-1 12H7L6 9Zm3 2v8h2v-8H9Zm4 0v8h2v-8h-2Z"></path>
-                      </svg>
-                    </button>
+                    <div class="checkbox-row">
+                      <label class="checkbox kid">
+                        <input
+                          type="checkbox"
+                          .checked=${person.is_kid}
+                          @change=${(event) => changeInvitee(index, {
+                            is_kid: event.target.checked,
+                            age: event.target.checked ? person.age ?? '' : '',
+                          })}
+                        >
+                        ${copy.isKid}
+                      </label>
+
+                      ${person.is_kid
+                        ? html`
+                            <label class="field age">
+                              ${copy.age}
+                              <input
+                                type="number"
+                                min="0"
+                                max="120"
+                                step="1"
+                                .value=${person.age ?? ''}
+                                @input=${(event) => changeInvitee(index, { age: event.target.value })}
+                              >
+                            </label>
+                          `
+                        : ''}
+                    </div>
+
                   </div>
                 `)}
 
-                <button type="button" @click=${addInvitee}>
-                  Add guest
+                <button class="add-guest" type="button" @click=${addInvitee}>
+                  ${copy.addGuest}
                 </button>
               </div>
 
-              <p>
-                Yes, you may invite as many people as you want. Don&apos;t abuse your power.
-              </p>
+              <div class="events">
+                <p class="question">${copy.eventsQuestion}</p>
 
-              <div>
-                <p>Which events will you attend?</p>
-
-                <ul>
+                <ul class="event-list">
                   ${form.is_family
                     ? html`
-                        <li>
-                          <label>
+                        <li class="event family-dinner">
+                          <label class="checkbox">
                             <input
                               type="checkbox"
                               .checked=${form.attends_family_dinner}
                               @change=${(event) => change({ attends_family_dinner: event.target.checked })}
                             >
-                            Family dinner
+                            ${copy.familyDinner}
                           </label>
                         </li>
                       `
@@ -362,40 +488,40 @@ lightElement(function InvitationForm({ effect }) {
 
                   ${form.is_gringo
                     ? html`
-                        <li>
-                          <label>
+                        <li class="event reception">
+                          <label class="checkbox">
                             <input
                               type="checkbox"
                               .checked=${form.attends_reception}
                               @change=${(event) => change({ attends_reception: event.target.checked })}
                             >
-                            Reception
+                            ${copy.reception}
                           </label>
                         </li>
                       `
                     : ''}
 
-                  <li>
-                    <label>
+                  <li class="event tornaboda">
+                    <label class="checkbox">
                       <input
                         type="checkbox"
                         .checked=${form.attends_tornaboda}
                         @change=${(event) => change({ attends_tornaboda: event.target.checked })}
                       >
-                      Tornaboda
+                      ${copy.tornaboda}
                     </label>
                   </li>
 
                   ${form.is_peer
                     ? html`
-                        <li>
-                          <label>
+                        <li class="event trip">
+                          <label class="checkbox">
                             <input
                               type="checkbox"
                               .checked=${form.attends_trip}
                               @change=${(event) => change({ attends_trip: event.target.checked })}
                             >
-                            Trip
+                            ${copy.trip}
                           </label>
                         </li>
                       `
@@ -403,37 +529,9 @@ lightElement(function InvitationForm({ effect }) {
                 </ul>
               </div>
 
-              ${form.is_gringo && !form.is_family
-                ? html`
-                    <div>
-                      <p>Are you interested in staying at a party house?</p>
-
-                      <label>
-                        <input
-                          type="radio"
-                          name="wants-party-house"
-                          .checked=${form.wants_party_house === true}
-                          @change=${() => change({ wants_party_house: true })}
-                        >
-                        Yes
-                      </label>
-
-                      <label>
-                        <input
-                          type="radio"
-                          name="wants-party-house"
-                          .checked=${form.wants_party_house === false}
-                          @change=${() => change({ wants_party_house: false })}
-                        >
-                        No
-                      </label>
-                    </div>
-                  `
-                : ''}
-
-              <div>
-                <label>
-                  Special requirements
+              <div class="special-requirements">
+                <label class="field">
+                  ${copy.specialRequirements}
                   <textarea
                     .value=${form.special_requirements}
                     @input=${(event) => change({ special_requirements: event.target.value })}
@@ -445,17 +543,15 @@ lightElement(function InvitationForm({ effect }) {
 
         ${form.attending === false
           ? html`
-              <p>
-                Thanks for considering it. We love you. Godspeed.
-              </p>
+              <p class="declined">${copy.declinedThanks}</p>
             `
           : ''}
 
         ${form.attending !== null
           ? html`
-              <div>
-                <label>
-                  Message
+              <div class="message">
+                <label class="field">
+                  ${copy.message}
                   <textarea
                     .value=${form.message}
                     @input=${(event) => change({ message: event.target.value })}
@@ -463,15 +559,18 @@ lightElement(function InvitationForm({ effect }) {
                 </label>
               </div>
 
-              <div>
+              <div class="status">
                 ${saveError.get()
-                  ? html`<p role="alert">${saveError.get()}</p>`
+                  ? html`<p class="error" role="alert">${saveError.get()}</p>`
                   : ''}
 
                 ${saveStatus.get() !== 'idle'
                   ? html`
-                      <p role="status">
-                        ${saveStatus.get() === 'saving' ? 'Saving…' : 'All changes saved'}
+                      <p
+                        class=${`save-status ${saveStatus.get()}`}
+                        role="status"
+                      >
+                        ${saveStatus.get() === 'saving' ? copy.saving : copy.saved}
                       </p>
                     `
                   : ''}

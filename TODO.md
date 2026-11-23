@@ -1,16 +1,12 @@
 
 
 
-just removes empty names
-have 'saving...' 'all changes saved'
 
 
-deploy JS for Carlos
 
-need to seed it in production
+upload JS
 
-
-change the url param ?id=
+change scripts
 
 
 
@@ -18,11 +14,24 @@ change the url param ?id=
 
 
 
-seed:
-finish all the names
-invitation time
-phone
-email
+dress code gallery
+
+test on iphone for #background issue
+
+test everything on phone
+
+seed list:
+fix times
+finish all the names possible
+add all the emails
+final upload of the list
+
+show abril:
+translations in HP and JS
+should we remove the weather question?
+
+
+confetti slightly bigger
 
 
 
@@ -32,37 +41,56 @@ email
 
 
 
-seeded Vegetarian list
-
-map links in the invite
-
-data model:
-invitation_time
 
 
 
 
 
 
-needs edit invitation in the admin (adding names for people filling out the form, etc)
-
-link to their invitation on the homepage
-
-sends me an email when they RSVP
-
-create WA broadcast group for people
-does such a thing exist for messages app
 
 
 
+## send it
+commit and deploy with: npx supabase functions deploy notify-rsvps
 
-------- deploy --------
+send to Carlos for the design and checking on devices
+send to the writers first: Lisa, Moira, Liz
 
-swap out JS files
 
-npx supabase db push
 
-seed the full invitation list
+
+
+
+## email sends
+do we still have NOTIFY_FROM and NOTIFY_TO?
+
+supabase/functions/.env.example: the local function settings, defaulting to dry run.
+
+```
+npx supabase secrets set NOTIFY_RSVPS_SECRET= RESEND_API_KEY=
+
+
+```
+npx supabase functions deploy notify-rsvps
+```
+
+`supabase/seed.sql` creates the Vault secrets, so after `npx supabase db reset`
+only the function needs its own:
+
+```bash
+cp supabase/functions/.env.example supabase/functions/.env
+```
+
+That file is ignored by Git and defaults to a dry run, so the email appears in
+the edge runtime logs (`npx supabase functions serve` shows them).
+
+
+
+
+
+## Supabase
+
+dev login: twfarnam@gmail.com / xochiboda-dev
 
 
 

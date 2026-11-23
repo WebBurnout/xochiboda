@@ -1,66 +1,34 @@
--- Fixed UUIDs make local invitation links stable across database resets.
-insert into public.invitations (
-  id,
-  name,
-  relationship,
-  is_gringo,
-  is_family,
-  is_peer
-)
-values
-  (
-    '10000000-0000-4000-8000-000000000001',
-    'Jim Farnam & Marcy Stovall',
-    'Beloved Parents of the Groom',
-    true,
-    true,
-    false
-  ),
-  (
-    '10000000-0000-4000-8000-000000000002',
-    'Elsa Rose',
-    'Beloved Sister of the Groom',
-    true,
-    true,
-    true
-  ),
-  (
-    '10000000-0000-4000-8000-000000000003',
-    'Alice Fordham',
-    'Beloved Friend of the Groom',
-    true,
-    false,
-    true
-  );
+-- Invitation data comes from seed.csv via `npm run seed`, not from this file.
 
-insert into public.invitees (
-  id,
-  invitation_id,
-  name,
-  sort_order
+-- Lets the notify-rsvps cron job reach the local edge function from inside the
+-- database container. The secret matches supabase/functions/.env.example.
+select vault.create_secret(
+  'http://supabase_kong_xochiboda:8000/functions/v1/notify-rsvps',
+  'notify_rsvps_url'
+);
+select vault.create_secret('local-notify-rsvps-secret', 'notify_rsvps_secret');
+
+-- Local admin login: twfarnam@gmail.com / xochiboda-dev. The empty-string
+-- token columns matter: GoTrue fails to sign in when they are null.
+with admin_user as (
+  insert into auth.users (
+    instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
+    raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
+    confirmation_token, recovery_token, email_change_token_new, email_change
+  ) values (
+    '00000000-0000-0000-0000-000000000000', gen_random_uuid(), 'authenticated',
+    'authenticated', 'twfarnam@gmail.com', crypt('xochiboda-dev', gen_salt('bf')),
+    now(), '{"provider": "email", "providers": ["email"]}', '{}', now(), now(),
+    '', '', '', ''
+  )
+  returning id, email
 )
-values
-  (
-    '20000000-0000-4000-8000-000000000001',
-    '10000000-0000-4000-8000-000000000001',
-    'Jim Farnam',
-    0
-  ),
-  (
-    '20000000-0000-4000-8000-000000000002',
-    '10000000-0000-4000-8000-000000000001',
-    'Marcy Stovall',
-    1
-  ),
-  (
-    '20000000-0000-4000-8000-000000000003',
-    '10000000-0000-4000-8000-000000000002',
-    'Elsa Rose',
-    0
-  ),
-  (
-    '20000000-0000-4000-8000-000000000004',
-    '10000000-0000-4000-8000-000000000003',
-    'Alice Fordham',
-    0
-  );
+insert into auth.identities (
+  id, user_id, provider_id, identity_data, provider, last_sign_in_at,
+  created_at, updated_at
+)
+select
+  gen_random_uuid(), id, id::text,
+  jsonb_build_object('sub', id::text, 'email', email, 'email_verified', true),
+  'email', now(), now(), now()
+from admin_user;
