@@ -32,6 +32,18 @@ function setLoadState(errorClass) {
   root.classList.toggle('has-404-error', errorClass === 'has-404-error')
 }
 
+// Static links to the RSVP page carry the code in their URL, so they keep
+// working when the browser has no localStorage to remember it.
+function addCodeToRsvpLinks(invitationCode) {
+  for (const link of document.querySelectorAll('a[href]')) {
+    const url = new URL(link.href)
+    if (url.origin !== window.location.origin || url.pathname !== '/rsvp') continue
+
+    url.searchParams.set('id', invitationCode)
+    link.href = url.pathname + url.search + url.hash
+  }
+}
+
 export const invitation = state(null)
 export const invitationStatus = state('idle')
 export const invitationError = state(null)
@@ -83,6 +95,8 @@ export async function loadInvitation() {
       setLoadState('has-404-error')
       return
     }
+
+    addCodeToRsvpLinks(invitationCode)
 
     const endpoint = new URL(`${supabaseConfig.url}/rest/v1/rpc/get_invitation_by_code`)
     endpoint.searchParams.set('p_code', invitationCode)
@@ -343,8 +357,17 @@ lightElement(function InvitationForm({ effect }) {
             aria-pressed=${form.attending === true ? 'true' : 'false'}
             data-state=${attendanceState(form.attending, true)}
             @click=${(event) => {
+              const formElement = event.currentTarget.form
               burstConfetti(event.currentTarget)
               change({ attending: true })
+              // On small screens the guest fields appear below the fold, so
+              // bring them into view when the first one isn't visible.
+              requestAnimationFrame(() => {
+                const firstField = formElement.querySelector('.guests input')
+                if (!firstField) return
+                if (firstField.getBoundingClientRect().bottom <= window.innerHeight) return
+                formElement.querySelector('.guests').scrollIntoView({ behavior: 'smooth', block: 'start' })
+              })
             }}
           >
             ${copy.attendingYes}

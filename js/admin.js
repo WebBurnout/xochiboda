@@ -179,9 +179,82 @@ function reactiveProperty(element, name, initialValue) {
   return value
 }
 
+// Below this width the wide tables are replaced by one card per row, because
+// sixteen columns cannot be squeezed onto a phone or a portrait tablet.
+const narrowQuery = window.matchMedia('(max-width: 64rem)')
+const isNarrow = state(narrowQuery.matches)
+narrowQuery.addEventListener('change', (event) => isNarrow.set(event.matches))
+
+// The popup is a popover so it sits in the top layer and is not clipped by the
+// scrolling tab panel. Popovers are centered by default, so place it under the
+// text, or over it near the bottom of the window, and keep it on screen.
+function showFullText(event) {
+  const trigger = event.currentTarget
+  const popup = trigger.querySelector('[popover]')
+  const rect = trigger.getBoundingClientRect()
+  popup.showPopover()
+  const fitsBelow = rect.bottom + 4 + popup.offsetHeight <= window.innerHeight
+  popup.style.top = `${fitsBelow ? rect.bottom + 4 : Math.max(8, rect.top - 4 - popup.offsetHeight)}px`
+  popup.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - popup.offsetWidth - 8))}px`
+}
+
+function hideFullText(event) {
+  event.currentTarget.querySelector('[popover]').hidePopover()
+}
+
+// Long free text would blow out a table column, so it is cut short and the rest
+// shown on hover or focus.
+function truncated(text) {
+  if (!text) return '—'
+  const characters = [...text]
+  if (characters.length <= 50) return text
+  return html`
+    <span
+      class="truncated"
+      tabindex="0"
+      @mouseenter=${showFullText}
+      @mouseleave=${hideFullText}
+      @focus=${showFullText}
+      @blur=${hideFullText}
+    >${characters.slice(0, 20).join('')}…<span popover="manual">${text}</span></span>
+  `
+}
+
+function inviteeList(invitees) {
+  return html`
+    <ul>
+      ${invitees.map((person) => html`
+        <li>
+          ${person.name}${person.is_kid ? ` — kid${person.age === null ? '' : `, ${person.age}`}` : ''}${person.is_vegetarian ? ' — vegetarian' : ''}${person.diet_notes ? ` — ${person.diet_notes}` : ''}
+        </li>
+      `)}
+    </ul>
+  `
+}
+
+function contactLinks(emails) {
+  return emailList(emails).length
+    ? emailList(emails).map((email, index) => html`${index ? ', ' : ''}<a href=${`mailto:${email}`}>${email}</a>`)
+    : '—'
+}
+
 lightElement(function XochibodaInvitations() {
   const items = reactiveProperty(this, 'items', [])
   const element = this
+
+  function editButton(item) {
+    return html`
+      <button
+        type="button"
+        @click=${() => element.dispatchEvent(new CustomEvent('edit-invitation', {
+          bubbles: true,
+          detail: item,
+        }))}
+      >
+        Edit
+      </button>
+    `
+  }
 
   // Declined invitations only need who they are and what they said.
   function renderTable(invitations, { brief = false } = {}) {
@@ -221,41 +294,55 @@ lightElement(function XochibodaInvitations() {
                 : html`
                     <td>${formatInvitationTime(item.invitation_time) || '—'}</td>
                     <td>${invitationStatus(item)}</td>
-                    <td>
-                      <ul>
-                        ${item.invitees.map((person) => html`
-                          <li>
-                            ${person.name}${person.is_kid ? ` — kid${person.age === null ? '' : `, ${person.age}`}` : ''}${person.is_vegetarian ? ' — vegetarian' : ''}${person.diet_notes ? ` — ${person.diet_notes}` : ''}
-                          </li>
-                        `)}
-                      </ul>
-                    </td>
-                    <td>${emailList(item.emails).length
-                      ? emailList(item.emails).map((email, index) => html`${index ? ', ' : ''}<a href=${`mailto:${email}`}>${email}</a>`)
-                      : '—'}</td>
+                    <td>${inviteeList(item.invitees)}</td>
+                    <td>${contactLinks(item.emails)}</td>
                     <td>${eventCell(item.is_gringo, item.attends_reception)}</td>
                     <td>${eventCell(item.is_family, item.attends_family_dinner)}</td>
                     <td>${yesNo(item.attends_tornaboda)}</td>
                     <td>${eventCell(item.is_peer, item.attends_trip)}</td>
-                    <td>${item.special_requirements || '—'}</td>
+                    <td>${truncated(item.special_requirements)}</td>
                   `}
-              <td>${item.message || '—'}</td>
+              <td>${truncated(item.message)}</td>
               <td>${formatDate(item.responded_at)}</td>
-              <td>
-                <button
-                  type="button"
-                  @click=${() => element.dispatchEvent(new CustomEvent('edit-invitation', {
-                    bubbles: true,
-                    detail: item,
-                  }))}
-                >
-                  Edit
-                </button>
-              </td>
+              <td>${editButton(item)}</td>
             </tr>
           `)}
         </tbody>
       </table>
+    `
+  }
+
+  // The same fields as the table, one card per invitation. Cards have room for
+  // the full requirements and message, so those are not truncated.
+  function renderCards(invitations, { brief = false } = {}) {
+    return html`
+      <ul class="cards">
+        ${invitations.map((item) => html`
+          <li>
+            <h4><a href=${invitationUrl(item.code)}>${item.name}</a></h4>
+            <dl>
+              <dt>Relationship</dt><dd>${item.relationship}</dd>
+              <dt>Category</dt><dd>${item.category || '—'}</dd>
+              ${brief
+                ? ''
+                : html`
+                    <dt>Time</dt><dd>${formatInvitationTime(item.invitation_time) || '—'}</dd>
+                    <dt>RSVP</dt><dd>${invitationStatus(item)}</dd>
+                    <dt>Invitees</dt><dd>${inviteeList(item.invitees)}</dd>
+                    <dt>Contact</dt><dd>${contactLinks(item.emails)}</dd>
+                    <dt>Reception</dt><dd>${eventCell(item.is_gringo, item.attends_reception)}</dd>
+                    <dt>Family dinner</dt><dd>${eventCell(item.is_family, item.attends_family_dinner)}</dd>
+                    <dt>Tornaboda</dt><dd>${yesNo(item.attends_tornaboda)}</dd>
+                    <dt>Trip</dt><dd>${eventCell(item.is_peer, item.attends_trip)}</dd>
+                    <dt>Requirements</dt><dd>${item.special_requirements || '—'}</dd>
+                  `}
+              <dt>Message</dt><dd>${item.message || '—'}</dd>
+              <dt>Responded</dt><dd>${formatDate(item.responded_at)}</dd>
+            </dl>
+            ${editButton(item)}
+          </li>
+        `)}
+      </ul>
     `
   }
 
@@ -264,19 +351,20 @@ lightElement(function XochibodaInvitations() {
     const attending = invitations.filter((item) => item.attending === true)
     const declined = invitations.filter((item) => item.attending === false)
     const unknown = invitations.filter((item) => item.attending === null)
+    const render = isNarrow.get() ? renderCards : renderTable
 
     return html`
       <section role="tabpanel" aria-labelledby="invitations-tab">
         <h2>Invitations</h2>
 
         <h3>Attending — ${attending.length}</h3>
-        ${renderTable(attending)}
+        ${render(attending)}
 
         <h3>Declined — ${declined.length}</h3>
-        ${renderTable(declined, { brief: true })}
+        ${render(declined, { brief: true })}
 
         <h3>No answer — ${unknown.length}</h3>
-        ${renderTable(unknown)}
+        ${render(unknown)}
       </section>
     `
   }
@@ -285,9 +373,8 @@ lightElement(function XochibodaInvitations() {
 lightElement(function XochibodaInvitees() {
   const items = reactiveProperty(this, 'items', [])
 
-  return () => html`
-    <section role="tabpanel" aria-labelledby="invitees-tab">
-      <h2>Invitees</h2>
+  function renderTable(people) {
+    return html`
       <table>
         <thead>
           <tr>
@@ -301,7 +388,7 @@ lightElement(function XochibodaInvitees() {
           </tr>
         </thead>
         <tbody>
-          ${items.get().map((person) => html`
+          ${people.map((person) => html`
             <tr>
               <td>${person.name}</td>
               <td>${person.invitation_name}</td>
@@ -314,6 +401,33 @@ lightElement(function XochibodaInvitees() {
           `)}
         </tbody>
       </table>
+    `
+  }
+
+  function renderCards(people) {
+    return html`
+      <ul class="cards">
+        ${people.map((person) => html`
+          <li>
+            <h4>${person.name}</h4>
+            <dl>
+              <dt>Invitation</dt><dd>${person.invitation_name}</dd>
+              <dt>Category</dt><dd>${person.invitation_category || '—'}</dd>
+              <dt>RSVP</dt><dd>${attendingLabel(person.invitation_attending)}</dd>
+              <dt>Age</dt><dd>${person.is_kid ? person.age ?? 'Kid' : '—'}</dd>
+              <dt>Vegetarian</dt><dd>${yesNo(person.is_vegetarian)}</dd>
+              <dt>Dietary notes</dt><dd>${person.diet_notes || '—'}</dd>
+            </dl>
+          </li>
+        `)}
+      </ul>
+    `
+  }
+
+  return () => html`
+    <section role="tabpanel" aria-labelledby="invitees-tab">
+      <h2>Invitees</h2>
+      ${isNarrow.get() ? renderCards(items.get()) : renderTable(items.get())}
     </section>
   `
 })
@@ -859,7 +973,8 @@ lightElement(`
     font-size: 0.9rem;
   }
 
-  :scope table + h3 {
+  :scope table + h3,
+  :scope .scroll + h3 {
     margin-block-start: 2rem;
   }
 
@@ -913,6 +1028,75 @@ lightElement(`
 
   :scope td ul {
     min-width: 8rem;
+    margin: 0;
+    padding-inline-start: 1rem;
+  }
+
+  :scope .truncated {
+    border-bottom: 1px dotted var(--muted);
+    cursor: help;
+  }
+
+  /* Popovers default to a centered dialog; showFullText places it instead. */
+  :scope .truncated [popover] {
+    inset: auto;
+    max-width: min(24rem, calc(100vw - 1rem));
+    margin: 0;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    background: var(--paper);
+    box-shadow: 0 0.5rem 1.5rem rgb(41 36 33 / 18%);
+    color: var(--ink);
+    white-space: pre-wrap;
+  }
+
+  :scope .scroll {
+    overflow-x: auto;
+  }
+
+  :scope .cards {
+    display: grid;
+    gap: 0.75rem;
+    margin: 0 0 2rem;
+    padding: 0;
+    list-style: none;
+  }
+
+  :scope .cards + h3 {
+    margin-block-start: 2rem;
+  }
+
+  :scope .cards > li {
+    padding: 1rem;
+    border: 1px solid var(--line);
+    border-radius: 0.5rem;
+  }
+
+  :scope .cards h4 {
+    margin: 0 0 0.75rem;
+  }
+
+  /* Overrides the summary tiles, which are the other dl on the page. */
+  :scope .cards dl {
+    grid-template-columns: max-content 1fr;
+    gap: 0.35rem 1rem;
+    margin: 0 0 1rem;
+    font-size: 0.9rem;
+  }
+
+  :scope .cards dt {
+    padding-block-start: 0.15rem;
+  }
+
+  :scope .cards dd {
+    margin: 0;
+    font-size: inherit;
+    font-weight: inherit;
+    overflow-wrap: anywhere;
+  }
+
+  :scope .cards dd ul {
     margin: 0;
     padding-inline-start: 1rem;
   }
@@ -1327,43 +1511,45 @@ lightElement(`
               </dl>
 
               <h3>Categories</h3>
-              <table>
-                <thead>
-                  <tr>
-                    <th scope="col">Category</th>
-                    <th scope="col">Invitations</th>
-                    <th scope="col">People</th>
-                    <th scope="col">Attending</th>
-                    <th scope="col">Attending people</th>
-                    <th scope="col">Declined</th>
-                    <th scope="col">No answer</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${rollup.map((row) => html`
+              <div class="scroll">
+                <table>
+                  <thead>
                     <tr>
-                      <th scope="row">${row.category}</th>
-                      <td>${row.invitations}</td>
-                      <td>${row.people}</td>
-                      <td>${row.attending}</td>
-                      <td>${row.attendingPeople}</td>
-                      <td>${row.declined}</td>
-                      <td>${row.pending}</td>
+                      <th scope="col">Category</th>
+                      <th scope="col">Invitations</th>
+                      <th scope="col">People</th>
+                      <th scope="col">Attending</th>
+                      <th scope="col">Attending people</th>
+                      <th scope="col">Declined</th>
+                      <th scope="col">No answer</th>
                     </tr>
-                  `)}
-                </tbody>
-                <tfoot>
-                  <tr>
-                    <th scope="row">Total</th>
-                    <td>${rollup.reduce((total, row) => total + row.invitations, 0)}</td>
-                    <td>${rollup.reduce((total, row) => total + row.people, 0)}</td>
-                    <td>${rollup.reduce((total, row) => total + row.attending, 0)}</td>
-                    <td>${rollup.reduce((total, row) => total + row.attendingPeople, 0)}</td>
-                    <td>${rollup.reduce((total, row) => total + row.declined, 0)}</td>
-                    <td>${rollup.reduce((total, row) => total + row.pending, 0)}</td>
-                  </tr>
-                </tfoot>
-              </table>
+                  </thead>
+                  <tbody>
+                    ${rollup.map((row) => html`
+                      <tr>
+                        <th scope="row">${row.category}</th>
+                        <td>${row.invitations}</td>
+                        <td>${row.people}</td>
+                        <td>${row.attending}</td>
+                        <td>${row.attendingPeople}</td>
+                        <td>${row.declined}</td>
+                        <td>${row.pending}</td>
+                      </tr>
+                    `)}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <th scope="row">Total</th>
+                      <td>${rollup.reduce((total, row) => total + row.invitations, 0)}</td>
+                      <td>${rollup.reduce((total, row) => total + row.people, 0)}</td>
+                      <td>${rollup.reduce((total, row) => total + row.attending, 0)}</td>
+                      <td>${rollup.reduce((total, row) => total + row.attendingPeople, 0)}</td>
+                      <td>${rollup.reduce((total, row) => total + row.declined, 0)}</td>
+                      <td>${rollup.reduce((total, row) => total + row.pending, 0)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
 
               <h3>People at each event</h3>
               ${['family_dinner', 'reception', 'ceremony', 'tornaboda', 'trip'].map((eventName) => {
