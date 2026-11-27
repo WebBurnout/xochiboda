@@ -150,8 +150,8 @@ function eventLabel(value) {
   return `${label[0].toUpperCase()}${label.slice(1)}`
 }
 
-function invitationUrl(id, path = '/invitation') {
-  return `${path}?id=${encodeURIComponent(id)}`
+function invitationUrl(code, path = '/invitation') {
+  return `${path}?id=${encodeURIComponent(code)}`
 }
 
 function copyText(text) {
@@ -213,7 +213,7 @@ lightElement(function XochibodaInvitations() {
         <tbody>
           ${invitations.map((item) => html`
             <tr>
-              <th scope="row"><a href=${invitationUrl(item.id)}>${item.name}</a></th>
+              <th scope="row"><a href=${invitationUrl(item.code)}>${item.name}</a></th>
               <td>${item.relationship}</td>
               <td>${item.category || '—'}</td>
               ${brief
@@ -1160,7 +1160,7 @@ lightElement(`
     if (event.detail.created) activeTab.set(null)
     await loadDashboard()
     notice.set(event.detail.created
-      ? `Invitation created: ${invitationUrl(event.detail.id)}`
+      ? `Invitation created: ${invitationUrl(event.detail.code)}`
       : `Saved ${event.detail.name}.`)
   }
 
@@ -1202,7 +1202,7 @@ lightElement(`
     notice.set('')
 
     try {
-      copyText(new URL(invitationUrl(invitation.id), document.baseURI).href)
+      copyText(new URL(invitationUrl(invitation.code), document.baseURI).href)
       copiedLink.set(invitation.id)
       setTimeout(() => {
         if (copiedLink.get() === invitation.id) copiedLink.set(null)

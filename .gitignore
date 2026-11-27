@@ -11,3 +11,4 @@ supabase/.branches/
 
 # Edge function secrets
 supabase/functions/.env
+supabase/seed.production.sql

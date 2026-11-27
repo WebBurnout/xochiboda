@@ -124,10 +124,11 @@ Add `is-loading` to the root HTML element in the static markup. The invitation m
 <html class="is-loading">
 ```
 
-Invitation links use the UUID query parameter:
+Invitation links carry the invitation's five-character base62 `code` (not its
+UUID) in the `id` query parameter:
 
 ```text
-https://localhost:8443/?id=INVITATION_UUID
+https://localhost:8443/?id=Xy3kQ
 ```
 
 Start the server:
@@ -189,32 +190,20 @@ To apply pending migrations to the linked hosted project deliberately, run:
 npx supabase db push --remote
 ```
 
-### Dropping and replacing
+### Changing the schema
 
-While the seed list is still being finalized the schema is edited in place in
-`supabase/migrations/` rather than with new migrations, so the database has to be
-rebuilt instead of migrated.
+The hosted database holds real RSVPs and invitation codes that have already
+been shared, so it is never reset. Every schema change goes in a new migration
+in `supabase/migrations/`; existing migrations are never edited, because the
+hosted project records which versions it has applied and `db push` will not
+re-run an edited one.
 
-Locally that is just a reset followed by the CSV load:
+The local database can still be rebuilt from scratch whenever that is useful:
 
 ```bash
 npx supabase db reset
 npm run seed
 ```
-
-The hosted project records which migration versions it has already applied, so
-an edited migration will **not** be re-run by `db push`. To rebuild it, reset the
-remote database and then push:
-
-```bash
-npx supabase db reset --remote
-npx supabase db push --remote
-```
-
-This destroys all hosted data, including any RSVPs already submitted, and
-regenerates every invitation UUID, which breaks links that have already been
-shared. Once the seed list is final, stop editing migrations in place and add
-new ones instead.
 
 ## Admin
 
@@ -321,7 +310,4 @@ select vault.create_secret(
 );
 select vault.create_secret('...', 'notify_rsvps_secret');
 ```
-
-`npx supabase db reset --remote` wipes these Vault secrets along with
-everything else, so create them again after a rebuild.
 

@@ -9,7 +9,8 @@ select vault.create_secret(
 select vault.create_secret('local-notify-rsvps-secret', 'notify_rsvps_secret');
 
 -- Local admin login: twfarnam@gmail.com / xochiboda-dev. The empty-string
--- token columns matter: GoTrue fails to sign in when they are null.
+-- token columns matter: GoTrue fails to sign in when they are null. pgcrypto
+-- lives in the extensions schema, which is not always on the search path.
 with admin_user as (
   insert into auth.users (
     instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
@@ -17,7 +18,7 @@ with admin_user as (
     confirmation_token, recovery_token, email_change_token_new, email_change
   ) values (
     '00000000-0000-0000-0000-000000000000', gen_random_uuid(), 'authenticated',
-    'authenticated', 'twfarnam@gmail.com', crypt('xochiboda-dev', gen_salt('bf')),
+    'authenticated', 'twfarnam@gmail.com', extensions.crypt('xochiboda-dev', extensions.gen_salt('bf')),
     now(), '{"provider": "email", "providers": ["email"]}', '{}', now(), now(),
     '', '', '', ''
   )

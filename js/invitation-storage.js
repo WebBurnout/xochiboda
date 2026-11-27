@@ -1,26 +1,26 @@
-// The stored invitation id is shared by the invitation page and by the homepage
-// link, so the key and its validation live in one place.
-export const INVITATION_STORAGE_KEY = 'xochiboda.invitationId'
-export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+// The stored invitation code is shared by the invitation page and by the
+// homepage link, so the key and its validation live in one place.
+export const INVITATION_STORAGE_KEY = 'xochiboda.invitationCode'
+export const INVITATION_CODE_PATTERN = /^[0-9A-Za-z]{5}$/
 
-// Returns null and clears the key when the stored value is not a UUID, so a
+// Returns null and clears the key when the stored value is not a code, so a
 // stale or hand-edited entry can never build a broken link.
-export function storedInvitationId() {
-  const invitationId = localStorage.getItem(INVITATION_STORAGE_KEY)
-  if (!invitationId) return null
+export function storedInvitationCode() {
+  const invitationCode = localStorage.getItem(INVITATION_STORAGE_KEY)
+  if (!invitationCode) return null
 
-  if (!UUID_PATTERN.test(invitationId)) {
+  if (!INVITATION_CODE_PATTERN.test(invitationCode)) {
     localStorage.removeItem(INVITATION_STORAGE_KEY)
     return null
   }
 
-  return invitationId
+  return invitationCode
 }
 
-export function rememberInvitationId(invitationId) {
-  localStorage.setItem(INVITATION_STORAGE_KEY, invitationId)
+export function rememberInvitationCode(invitationCode) {
+  localStorage.setItem(INVITATION_STORAGE_KEY, invitationCode)
 }
 
-export function invitationPath(invitationId, path = '/invitation') {
-  return `${path}?id=${encodeURIComponent(invitationId)}`
+export function invitationPath(invitationCode, path = '/invitation') {
+  return `${path}?id=${encodeURIComponent(invitationCode)}`
 }

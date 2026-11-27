@@ -7,9 +7,9 @@ import { supabaseConfig } from './config.js'
 import { formatInvitationTime } from './format.js'
 import { copy } from './language.js'
 import {
-  INVITATION_STORAGE_KEY,
-  UUID_PATTERN,
-  rememberInvitationId,
+  INVITATION_CODE_PATTERN,
+  rememberInvitationCode,
+  storedInvitationCode,
 } from './invitation-storage.js'
 
 // Mirrors the invitation's group flags onto the root element so static markup
@@ -62,25 +62,21 @@ export async function loadInvitation() {
   document.documentElement.classList.remove('has-error', 'has-404-error')
 
   try {
-    let invitationId = new URL(window.location.href).searchParams.get('id')
+    let invitationCode = new URL(window.location.href).searchParams.get('id')
 
-    if (invitationId !== null) {
-      // A malformed ID can never match an invitation, so treat it as not found
-      // rather than falling back to the remembered one.
-      if (!UUID_PATTERN.test(invitationId)) {
-        invitationId = null
+    if (invitationCode !== null) {
+      // A malformed code can never match an invitation, so treat it as not
+      // found rather than falling back to the remembered one.
+      if (!INVITATION_CODE_PATTERN.test(invitationCode)) {
+        invitationCode = null
       } else {
-        rememberInvitationId(invitationId)
+        rememberInvitationCode(invitationCode)
       }
     } else {
-      invitationId = localStorage.getItem(INVITATION_STORAGE_KEY)
-      if (invitationId && !UUID_PATTERN.test(invitationId)) {
-        localStorage.removeItem(INVITATION_STORAGE_KEY)
-        invitationId = null
-      }
+      invitationCode = storedInvitationCode()
     }
 
-    if (!invitationId) {
+    if (!invitationCode) {
       invitation.set(null)
       applyGroupClasses(null)
       invitationStatus.set('not-found')
@@ -88,8 +84,8 @@ export async function loadInvitation() {
       return
     }
 
-    const endpoint = new URL(`${supabaseConfig.url}/rest/v1/rpc/get_invitation`)
-    endpoint.searchParams.set('p_invitation_id', invitationId)
+    const endpoint = new URL(`${supabaseConfig.url}/rest/v1/rpc/get_invitation_by_code`)
+    endpoint.searchParams.set('p_code', invitationCode)
 
     const response = await fetch(endpoint, {
       headers: getSupabaseHeaders(),
@@ -137,34 +133,48 @@ lightElement(function InvitationTime() {
   `
 })
 
-function burstConfetti(button) {
-  button.animate(
-    [
-      {
-        opacity: 1,
-        boxShadow: '0 0 #ff007f, 0 0 #00f0ff, 0 0 #ffeb3b, 0 0 #4caf50, 0 0 #ff5722, 0 0 #9c27b0, 0 0 #3f51b5, 0 0 #009688',
-      },
-      {
-        opacity: 0,
-        boxShadow: '-50px -60px #ff007f, 60px -70px #00f0ff, -70px 50px #ffeb3b, 60px 60px #4caf50, -80px -10px #ff5722, 80px -20px #9c27b0, -30px 80px #3f51b5, 30px -80px #009688',
-      },
-    ],
-    { duration: 600, easing: 'ease-out', pseudoElement: '::before' },
-  )
+const confettiColors = [
+  '#ff007f', '#00f0ff', '#ffeb3b', '#4caf50', '#ff5722', '#9c27b0',
+  '#3f51b5', '#009688', '#e91e63', '#03a9f4', '#ffc107', '#e040fb',
+]
 
-  button.animate(
-    [
-      {
-        opacity: 1,
-        boxShadow: '0 0 #e91e63, 0 0 #03a9f4, 0 0 #ffc107, 0 0 #8bc34a, 0 0 #ff9800, 0 0 #e040fb, 0 0 #00e676, 0 0 #ff3d00',
-      },
-      {
-        opacity: 0,
-        boxShadow: '-90px -40px #e91e63, 100px -50px #03a9f4, -40px -90px #ffc107, 50px -100px #8bc34a, -100px 30px #ff9800, 90px 50px #e040fb, -50px 100px #00e676, 70px 90px #ff3d00',
-      },
-    ],
-    { duration: 600, easing: 'ease-out', pseudoElement: '::after' },
-  )
+function burstConfetti(button) {
+  const rect = button.getBoundingClientRect()
+  const centerX = rect.left + rect.width / 2
+  const centerY = rect.top + rect.height / 2
+
+  for (let i = 0; i < 24; i++) {
+    const piece = document.createElement('span')
+    piece.className = 'confetti-piece'
+    piece.style.left = `${centerX}px`
+    piece.style.top = `${centerY}px`
+    piece.style.background = confettiColors[i % confettiColors.length]
+    document.body.append(piece)
+
+    const angle = Math.random() * Math.PI * 2
+    const distance = 60 + Math.random() * 80
+    const x = Math.cos(angle) * distance
+    const y = Math.sin(angle) * distance
+    const spin = (Math.random() - 0.5) * 1440
+    const flip = Math.random() * 1080
+
+    piece.animate(
+      [
+        {
+          transform: 'translate(-50%, -50%) rotate(0deg) rotateX(0deg)',
+          opacity: 1,
+          easing: 'cubic-bezier(.15, .7, .3, 1)',
+        },
+        { opacity: 1, offset: 0.4 },
+        { opacity: 0, offset: 0.8 },
+        {
+          transform: `translate(calc(-50% + ${x}px), calc(-50% + ${y}px)) rotate(${spin}deg) rotateX(${flip}deg)`,
+          opacity: 0,
+        },
+      ],
+      { duration: 500 + Math.random() * 500 },
+    ).finished.then(() => piece.remove())
+  }
 }
 
 function floatPoop(button) {

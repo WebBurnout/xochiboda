@@ -1,5 +1,46 @@
+create extension if not exists pgcrypto with schema extensions;
+
+-- Invitation links carry a short random code rather than the UUID. Five base62
+-- characters give about 916 million possibilities, which keeps the link short
+-- while leaving codes impractical to guess. Defined before the table because it
+-- is the column default; plpgsql only resolves the table when it runs.
+create or replace function public.generate_invitation_code()
+returns text
+language plpgsql
+volatile
+set search_path = ''
+as $$
+declare
+  v_alphabet constant text := '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+  v_code text;
+  v_byte integer;
+begin
+  loop
+    v_code := '';
+
+    while length(v_code) < 5 loop
+      v_byte := get_byte(extensions.gen_random_bytes(1), 0);
+      -- 248 is the largest multiple of 62 that fits in a byte, so rejecting the
+      -- bytes above it keeps every character equally likely.
+      if v_byte < 248 then
+        v_code := v_code || substr(v_alphabet, v_byte % 62 + 1, 1);
+      end if;
+    end loop;
+
+    exit when not exists (
+      select 1 from public.invitations as i where i.code = v_code
+    );
+  end loop;
+
+  return v_code;
+end;
+$$;
+
 create table public.invitations (
   id uuid primary key default gen_random_uuid(),
+  code text not null unique
+    default public.generate_invitation_code()
+    check (code ~ '^[0-9A-Za-z]{5}$'),
   name text not null,
   relationship text not null,
   category text,
@@ -145,6 +186,7 @@ set search_path = ''
 as $$
   select jsonb_build_object(
     'id', i.id,
+    'code', i.code,
     'name', i.name,
     'relationship', i.relationship,
     'invitation_time', i.invitation_time,
@@ -182,6 +224,20 @@ as $$
   )
   from public.invitations as i
   where i.id = p_invitation_id;
+$$;
+
+-- The only way in for guests: the code from their link. get_invitation itself
+-- stays internal, so the UUID is never a second lookup path.
+create or replace function public.get_invitation_by_code(p_code text)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select public.get_invitation(i.id)
+  from public.invitations as i
+  where i.code = p_code;
 $$;
 
 create or replace function public.save_rsvp(
@@ -398,6 +454,7 @@ begin
         jsonb_agg(
           jsonb_build_object(
             'id', i.id,
+            'code', i.code,
             'name', i.name,
             'relationship', i.relationship,
             'category', i.category,
@@ -501,6 +558,7 @@ set search_path = ''
 as $$
 declare
   v_invitation_id uuid;
+  v_code text;
 begin
   if auth.uid() is null then
     raise exception using
@@ -548,12 +606,13 @@ begin
     nullif(btrim(p_special_requirements), ''),
     nullif(btrim(p_message), '')
   )
-  returning id into v_invitation_id;
+  returning id, code into v_invitation_id, v_code;
 
   perform public.replace_invitees(v_invitation_id, p_invitees);
 
   return jsonb_build_object(
     'id', v_invitation_id,
+    'code', v_code,
     'name', btrim(p_name)
   );
 end;
@@ -658,6 +717,8 @@ $$;
 
 -- Functions are executable by PUBLIC by default, so make access explicit.
 revoke all on function public.set_updated_at() from public;
+revoke all on function public.generate_invitation_code() from public;
+revoke all on function public.get_invitation_by_code(text) from public;
 revoke all on function public.replace_invitees(uuid, jsonb) from public;
 revoke all on function public.get_invitation(uuid) from public;
 revoke all on function public.save_rsvp(uuid, boolean, boolean, boolean, boolean, boolean, text, text, jsonb) from public;
@@ -666,7 +727,7 @@ revoke all on function public.admin_create_invitation(text, text, text, text, te
 revoke all on function public.admin_update_invitation(uuid, text, text, text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, text, text, jsonb) from public;
 revoke all on function public.admin_mark_invitation_sent(uuid) from public;
 
-grant execute on function public.get_invitation(uuid) to anon, authenticated;
+grant execute on function public.get_invitation_by_code(text) to anon, authenticated;
 grant execute on function public.save_rsvp(uuid, boolean, boolean, boolean, boolean, boolean, text, text, jsonb) to anon, authenticated;
 grant execute on function public.admin_get_dashboard() to authenticated;
 grant execute on function public.admin_create_invitation(text, text, text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, text, text, jsonb) to authenticated;
